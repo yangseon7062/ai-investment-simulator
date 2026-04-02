@@ -1,0 +1,184 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'Segoe UI', sans-serif;
+  background: #0f1117;
+  color: #e0e0e0;
+  font-size: 14px;
+}
+
+.navbar {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 12px 24px;
+  background: #1a1d27;
+  border-bottom: 1px solid #2a2d3a;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.logo { font-weight: 700; font-size: 16px; color: #7c6aff; }
+
+.nav-tabs { display: flex; gap: 4px; }
+
+.nav-tab {
+  padding: 6px 14px;
+  border: none;
+  background: transparent;
+  color: #888;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.15s;
+}
+.nav-tab:hover { background: #2a2d3a; color: #ccc; }
+.nav-tab.active { background: #7c6aff22; color: #7c6aff; }
+
+.page { display: none; padding: 24px; max-width: 1400px; margin: 0 auto; }
+.page.active { display: block; }
+
+/* 한 줄 요약 */
+.daily-summary {
+  background: linear-gradient(135deg, #7c6aff22, #3a6bff22);
+  border: 1px solid #7c6aff44;
+  border-radius: 12px;
+  padding: 16px 20px;
+  font-size: 15px;
+  font-weight: 500;
+  margin-bottom: 16px;
+}
+
+/* 국면 배지 */
+.regime-badges { display: flex; gap: 12px; margin-bottom: 16px; }
+.badge {
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.badge-up    { background: #1a3a1a; color: #4caf50; border: 1px solid #4caf5044; }
+.badge-down  { background: #3a1a1a; color: #ef5350; border: 1px solid #ef535044; }
+.badge-side  { background: #2a2a1a; color: #ffc107; border: 1px solid #ffc10744; }
+.badge-vol   { background: #3a1a3a; color: #ab47bc; border: 1px solid #ab47bc44; }
+
+/* 내러티브 */
+.narrative-box {
+  background: #1a1d27;
+  border: 1px solid #2a2d3a;
+  border-radius: 10px;
+  padding: 14px 18px;
+  margin-bottom: 24px;
+  line-height: 1.7;
+  color: #aaa;
+  font-size: 13px;
+}
+
+h2 { font-size: 15px; font-weight: 600; margin-bottom: 12px; color: #ccc; }
+
+/* 에이전트 카드 */
+.agent-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; margin-bottom: 24px; }
+
+.agent-card {
+  background: #1a1d27;
+  border: 1px solid #2a2d3a;
+  border-radius: 10px;
+  padding: 14px;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.agent-card:hover { border-color: #7c6aff66; }
+
+.agent-name { font-weight: 700; font-size: 14px; margin-bottom: 4px; }
+.agent-style { font-size: 11px; color: #666; margin-bottom: 10px; }
+.agent-return { font-size: 20px; font-weight: 700; }
+.return-pos { color: #4caf50; }
+.return-neg { color: #ef5350; }
+.return-zero { color: #888; }
+.agent-meta { font-size: 11px; color: #666; margin-top: 6px; }
+
+/* 차트 */
+.chart-container { background: #1a1d27; border: 1px solid #2a2d3a; border-radius: 10px; padding: 16px; margin-bottom: 24px; height: 280px; }
+
+/* 2컬럼 */
+.row-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+
+/* 로그 카드 */
+.log-card {
+  background: #1a1d27;
+  border: 1px solid #2a2d3a;
+  border-radius: 8px;
+  padding: 14px;
+  margin-bottom: 10px;
+  cursor: pointer;
+}
+.log-card:hover { border-color: #3a3d4a; }
+.log-header { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; }
+.log-agent { font-weight: 700; font-size: 13px; }
+.log-type { font-size: 11px; padding: 2px 8px; border-radius: 10px; }
+.type-buy     { background: #1a3a1a; color: #4caf50; }
+.type-sell    { background: #3a1a1a; color: #ef5350; }
+.type-monitor { background: #1a2a3a; color: #42a5f5; }
+.type-pass    { background: #2a2a2a; color: #888; }
+.type-postmortem { background: #3a2a1a; color: #ffa726; }
+.type-debate  { background: #2a1a3a; color: #ab47bc; }
+.type-roundtable { background: #1a3a3a; color: #26c6da; }
+.log-time { font-size: 11px; color: #555; margin-left: auto; }
+.log-summary { font-size: 12px; color: #888; line-height: 1.5; }
+
+/* 리포트 뷰 */
+.report-modal {
+  position: fixed; inset: 0;
+  background: #000a;
+  display: flex; align-items: center; justify-content: center;
+  z-index: 200;
+}
+.report-content {
+  background: #1a1d27;
+  border: 1px solid #3a3d4a;
+  border-radius: 12px;
+  padding: 28px;
+  max-width: 720px;
+  width: 90%;
+  max-height: 80vh;
+  overflow-y: auto;
+  line-height: 1.8;
+}
+.report-content h1, .report-content h2, .report-content h3 { color: #ccc; margin: 16px 0 8px; }
+.report-content p { color: #aaa; margin-bottom: 10px; }
+.report-content ul { padding-left: 20px; color: #aaa; }
+.close-btn { float: right; background: none; border: none; color: #888; font-size: 20px; cursor: pointer; }
+
+/* 종목 매트릭스 */
+.matrix-table { width: 100%; border-collapse: collapse; }
+.matrix-table th { background: #1a1d27; padding: 10px 14px; text-align: left; color: #666; font-weight: 600; font-size: 12px; border-bottom: 1px solid #2a2d3a; }
+.matrix-table td { padding: 12px 14px; border-bottom: 1px solid #1e2130; font-size: 13px; }
+.status-buy   { color: #4caf50; font-weight: 700; }
+.status-hold  { color: #42a5f5; }
+.status-watch { color: #ffc107; }
+.status-none  { color: #444; }
+
+/* 검색 바 */
+.search-bar { display: flex; gap: 10px; margin-bottom: 20px; }
+.search-bar input { flex: 1; background: #1a1d27; border: 1px solid #2a2d3a; border-radius: 8px; padding: 10px 14px; color: #e0e0e0; font-size: 14px; }
+.search-bar button { background: #7c6aff; border: none; border-radius: 8px; padding: 10px 20px; color: #fff; cursor: pointer; font-size: 14px; }
+
+/* 필터 바 */
+.filter-bar { display: flex; gap: 10px; margin-bottom: 16px; }
+.filter-bar select { background: #1a1d27; border: 1px solid #2a2d3a; border-radius: 8px; padding: 8px 12px; color: #e0e0e0; font-size: 13px; }
+
+/* 에이전트 셀렉터 */
+.agent-selector { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
+.agent-btn { padding: 8px 16px; border: 1px solid #2a2d3a; background: #1a1d27; border-radius: 8px; color: #888; cursor: pointer; font-size: 13px; }
+.agent-btn.active { border-color: #7c6aff; color: #7c6aff; background: #7c6aff11; }
+
+/* 포트폴리오 테이블 */
+.portfolio-table { width: 100%; border-collapse: collapse; }
+.portfolio-table th { background: #1a1d27; padding: 8px 12px; text-align: left; color: #666; font-size: 12px; border-bottom: 1px solid #2a2d3a; }
+.portfolio-table td { padding: 10px 12px; border-bottom: 1px solid #1e2130; font-size: 13px; }
+
+@media (max-width: 768px) {
+  .row-2col { grid-template-columns: 1fr; }
+  .agent-cards { grid-template-columns: repeat(2, 1fr); }
+}

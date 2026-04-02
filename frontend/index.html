@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI 투자 시뮬레이터</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <nav class="navbar">
+    <span class="logo">AI 투자 시뮬레이터</span>
+    <div class="nav-tabs">
+      <button class="nav-tab active" onclick="showPage('main')">메인</button>
+      <button class="nav-tab" onclick="showPage('agents')">에이전트</button>
+      <button class="nav-tab" onclick="showPage('logs')">로그</button>
+      <button class="nav-tab" onclick="showPage('debate')">토론</button>
+      <button class="nav-tab" onclick="showPage('roundtable')">라운드테이블</button>
+      <button class="nav-tab" onclick="showPage('stock')">종목 뷰</button>
+      <button class="nav-tab" onclick="showPage('data')">데이터 현황</button>
+    </div>
+  </nav>
+
+  <!-- 메인 -->
+  <div id="page-main" class="page active">
+    <div class="daily-summary" id="daily-summary">오늘의 한 줄 요약 로딩 중...</div>
+
+    <div class="regime-badges" id="regime-badges"></div>
+
+    <div class="narrative-box" id="narrative-box"></div>
+
+    <h2>에이전트 성과</h2>
+    <div class="agent-cards" id="agent-cards"></div>
+
+    <h2>누적 성과 비교</h2>
+    <div class="chart-container">
+      <canvas id="performance-chart"></canvas>
+    </div>
+
+    <div class="row-2col">
+      <div>
+        <h2>충돌·동의 종목</h2>
+        <div id="conflicts-list"></div>
+      </div>
+      <div>
+        <h2>통합 포트폴리오</h2>
+        <div id="unified-portfolio"></div>
+      </div>
+    </div>
+
+    <div class="row-2col">
+      <div>
+        <h2>최근 투자 로그</h2>
+        <div id="recent-logs"></div>
+      </div>
+      <div>
+        <h2>API 비용</h2>
+        <div id="api-cost"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 에이전트 상세 -->
+  <div id="page-agents" class="page">
+    <div class="agent-selector" id="agent-selector"></div>
+    <div id="agent-detail"></div>
+  </div>
+
+  <!-- 로그 -->
+  <div id="page-logs" class="page">
+    <div class="filter-bar">
+      <select id="log-agent-filter" onchange="loadLogs()">
+        <option value="">전체 에이전트</option>
+      </select>
+      <select id="log-type-filter" onchange="loadLogs()">
+        <option value="">전체 유형</option>
+        <option value="buy">매수</option>
+        <option value="sell">매도</option>
+        <option value="monitor">모니터링</option>
+        <option value="pass">관망</option>
+        <option value="postmortem">사후검증</option>
+        <option value="debate">토론</option>
+      </select>
+    </div>
+    <div id="logs-list"></div>
+  </div>
+
+  <!-- 토론 뷰 -->
+  <div id="page-debate" class="page">
+    <h2>에이전트 간 충돌 토론</h2>
+    <div id="debate-list"></div>
+  </div>
+
+  <!-- 라운드테이블 -->
+  <div id="page-roundtable" class="page">
+    <h2>주간 라운드테이블</h2>
+    <div id="roundtable-content"></div>
+  </div>
+
+  <!-- 종목 뷰 -->
+  <div id="page-stock" class="page">
+    <div class="search-bar">
+      <input type="text" id="stock-search" placeholder="종목 코드 입력 (예: 005930, NVDA)" />
+      <button onclick="searchStock()">조회</button>
+    </div>
+    <div id="stock-matrix"></div>
+  </div>
+
+  <!-- 데이터 현황 -->
+  <div id="page-data" class="page">
+    <h2>데이터 수집 현황</h2>
+    <div id="data-status"></div>
+  </div>
+
+  <script src="/js/app.js"></script>
+</body>
+</html>
