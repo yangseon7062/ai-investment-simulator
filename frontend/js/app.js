@@ -488,28 +488,19 @@ async function loadDataStatus() {
     </div>`;
 }
 
-// ── Init ───────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', () => {
-  // Sidebar nav click handlers
-  document.querySelectorAll('.nav-link').forEach(link => {
-    link.addEventListener('click', () => showPage(link.dataset.page));
-  });
-
-  // Refresh button
-  document.getElementById('refresh-btn')?.addEventListener('click', () => {
-    loadPageData(currentPage || 'main');
-  });
-
-  // Global search (Enter → stock lookup)
-  document.getElementById('global-search')?.addEventListener('keydown', e => {
-    if (e.key === 'Enter') {
-      const v = e.target.value.trim();
-      if (v) { goToStock(v.toUpperCase()); e.target.value = ''; }
-    }
-  });
-
-  // Show first page
-  showPage('main');
+// ── Init (스크립트가 body 하단에 있으므로 DOM 이미 준비됨) ──────
+document.getElementById('refresh-btn')?.addEventListener('click', () => {
+  loadPageData(currentPage || 'main');
 });
+
+document.getElementById('global-search')?.addEventListener('keydown', e => {
+  if (e.key === 'Enter') {
+    const v = e.target.value.trim();
+    if (v) { goToStock(v.toUpperCase()); e.target.value = ''; }
+  }
+});
+
+// 초기 메인 페이지 로드
+loadMain();
 
 let currentPage = 'main';
