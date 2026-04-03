@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import os
@@ -39,7 +40,23 @@ async def health():
     return {"status": "ok"}
 
 
-# 프론트엔드 정적 파일 (마지막에 마운트)
+# 프론트엔드 정적 파일
 frontend_dir = os.path.join(BASE_DIR, "frontend")
+
 if os.path.exists(frontend_dir):
-    app.mount("/", StaticFiles(directory=frontend_dir, html=True), name="frontend")
+    # CSS / JS / 기타 정적 에셋
+    app.mount("/css", StaticFiles(directory=os.path.join(frontend_dir, "css")), name="css")
+    app.mount("/js",  StaticFiles(directory=os.path.join(frontend_dir, "js")),  name="js")
+
+    # SPA 루트 — 모든 프론트엔드 경로를 index.html 로 처리
+    @app.get("/")
+    async def serve_root():
+        return FileResponse(os.path.join(frontend_dir, "index.html"))
+
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        # API 경로는 위에서 이미 처리됨 — 나머지는 SPA index.html 반환
+        file_path = os.path.join(frontend_dir, full_path)
+        if os.path.isfile(file_path):
+            return FileResponse(file_path)
+        return FileResponse(os.path.join(frontend_dir, "index.html"))
