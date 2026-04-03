@@ -16,6 +16,8 @@ const PAGE_TITLES = {
 
 let logsLimit = 30;
 const LOGS_STEP = 30;
+let notifOpen = false;
+let notifLoaded = false;
 
 // ── Modal ──────────────────────────────────────────────────────
 function showModal(html) {
@@ -28,6 +30,45 @@ function updateModal(html) {
 function closeModal() {
   document.getElementById('modal-backdrop').classList.add('hidden');
 }
+
+// ── Notifications ──────────────────────────────────────────────
+function toggleNotifications() {
+  notifOpen = !notifOpen;
+  document.getElementById('notif-dropdown').classList.toggle('hidden', !notifOpen);
+  if (notifOpen && !notifLoaded) loadNotifications();
+}
+
+async function loadNotifications() {
+  const list = document.getElementById('notif-list');
+  list.innerHTML = '<div class="px-4 py-4 text-xs text-gray-600 text-center"><span class="material-symbols-outlined animate-spin text-sm align-middle">progress_activity</span></div>';
+  const events = await apiFetch('/api/dashboard/notifications').catch(() => []);
+  notifLoaded = true;
+  if (!events.length) {
+    list.innerHTML = '<div class="px-4 py-6 text-xs text-gray-600 text-center">이벤트 없음</div>';
+    return;
+  }
+  const dot = document.getElementById('notif-dot');
+  if (dot) dot.classList.remove('hidden');
+  list.innerHTML = events.map(e => `
+    <div class="px-4 py-3 hover:bg-white/[.03] border-b border-[#2a2f3e] last:border-0">
+      <div class="flex items-start justify-between gap-2">
+        <div class="min-w-0">
+          <span class="text-xs font-semibold text-white">${e.event_type || '이벤트'}</span>
+          ${e.description ? `<p class="text-[11px] text-gray-500 mt-0.5 truncate">${e.description}</p>` : ''}
+        </div>
+        <span class="text-[10px] text-gray-600 shrink-0">${formatTs(e.created_at)}</span>
+      </div>
+    </div>`).join('');
+}
+
+document.addEventListener('click', e => {
+  const dropdown = document.getElementById('notif-dropdown');
+  const btn = document.getElementById('notif-btn');
+  if (notifOpen && dropdown && btn && !dropdown.contains(e.target) && !btn.contains(e.target)) {
+    notifOpen = false;
+    dropdown.classList.add('hidden');
+  }
+});
 
 // ── Navigation ─────────────────────────────────────────────────
 function showPage(pageId) {
@@ -68,10 +109,11 @@ async function loadMain() {
     '<span class="inline-flex items-center gap-2"><span class="material-symbols-outlined animate-spin text-lg align-middle">progress_activity</span>서버 응답 대기 중…</span>';
   document.getElementById('banner-body').textContent = '(첫 로드 시 최대 30초 소요될 수 있습니다)';
 
-  const [summary, portfolio, conflicts] = await Promise.all([
+  const [summary, portfolio, conflicts, agentsList] = await Promise.all([
     apiFetch('/api/dashboard/summary').catch(() => ({})),
     apiFetch('/api/dashboard/portfolio').catch(() => []),
     apiFetch('/api/dashboard/conflicts').catch(() => []),
+    apiFetch('/api/agents/').catch(() => []),
   ]);
 
   const snap = summary.snapshot || {};
@@ -89,8 +131,8 @@ async function loadMain() {
   // Regime badges
   renderRegimeBadges(snap);
 
-  // Agent cards
-  renderAgentCards(summary.agents || []);
+  // Agent cards — prefer /api/agents/ (has cash_krw + daily_return)
+  renderAgentCards(agentsList.length ? agentsList : (summary.agents || []));
 
   // Performance chart
   await loadPerformanceChart();
@@ -145,10 +187,13 @@ function renderAgentCards(agents) {
     const ret = a.total_return || 0;
     const sign = ret >= 0 ? '+' : '';
     const retColor = ret > 0 ? 'text-success' : ret < 0 ? 'text-danger' : 'text-warning';
+    const daily = a.daily_return || 0;
+    const dailySign = daily >= 0 ? '+' : '';
+    const dailyColor = daily > 0 ? 'text-success' : daily < 0 ? 'text-danger' : 'text-gray-600';
     return `
     <div class="bg-card p-4 rounded-xl border border-[#2a2f3e] hover:border-primary/50 transition-all group cursor-pointer"
          onclick="openAgentDetail('${agent.id}')">
-      <div class="flex items-center justify-between mb-4">
+      <div class="flex items-center justify-between mb-3">
         <div class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 group-hover:bg-primary transition-colors"
              style="background:${agent.color}33">
           <span class="material-symbols-outlined text-sm" style="color:${agent.color}">${agent.icon}</span>
@@ -157,9 +202,9 @@ function renderAgentCards(agents) {
       </div>
       <p class="text-xs font-bold text-white">${agent.name}</p>
       <p class="text-[10px] text-gray-500 uppercase tracking-tighter">${agent.style}</p>
-      <div class="mt-2 pt-2 border-t border-[#2a2f3e] flex justify-between text-[10px] text-gray-600">
-        <span>${(a.open_positions || 0)}종목</span>
-        <span>${a.total_value_krw != null ? (a.total_value_krw/1e8).toFixed(1)+'억' : '—'}</span>
+      <div class="mt-2 pt-2 border-t border-[#2a2f3e] flex justify-between text-[10px]">
+        <span class="text-gray-600">${(a.open_positions || 0)}종목</span>
+        <span class="${dailyColor}">일간 ${dailySign}${daily.toFixed(2)}%</span>
       </div>
     </div>`;
   }).join('');
@@ -281,15 +326,18 @@ async function openAgentDetail(agentId) {
 
   const agent = AGENTS.find(a => a.id === agentId) || { name: agentId, color: '#7c6aff', icon: 'smart_toy' };
 
-  const [positions, perf] = await Promise.all([
+  const [positions, perf, postmortems] = await Promise.all([
     apiFetch(`/api/agents/${agentId}/positions`).catch(() => []),
     apiFetch(`/api/agents/${agentId}/performance`).catch(() => ({})),
+    apiFetch(`/api/agents/${agentId}/postmortems`).catch(() => []),
   ]);
 
   const snapshots = perf.snapshots || [];
   const totalReturn = snapshots.length
     ? ((snapshots[snapshots.length-1].total_value_krw - 1e8) / 1e8 * 100).toFixed(2)
     : '0.00';
+  // Try to get cash info from /api/agents/ (may already be in memory from loadMain)
+  const agentFullData = await apiFetch('/api/agents/').then(list => list.find(a => a.agent_id === agentId)).catch(() => null);
 
   detail.innerHTML = `
     <div class="space-y-5">
@@ -319,6 +367,18 @@ async function openAgentDetail(agentId) {
         <div class="h-32"><canvas id="agent-chart-${agentId}"></canvas></div>
       </div>` : ''}
 
+      <!-- Cash info -->
+      ${agentFullData ? `
+      <div class="bg-card border border-gray-800/60 rounded-2xl p-4 flex gap-6 text-sm">
+        <div><div class="text-xs text-gray-600 mb-0.5">현금 잔고</div><div class="font-bold text-white">${(agentFullData.cash_krw/1e8).toFixed(2)}억</div></div>
+        <div><div class="text-xs text-gray-600 mb-0.5">총 자산</div><div class="font-bold text-white">${(agentFullData.total_value_krw/1e8).toFixed(2)}억</div></div>
+        <div><div class="text-xs text-gray-600 mb-0.5">일간 수익률</div>
+          <div class="font-bold ${(agentFullData.daily_return||0)>0?'text-success':(agentFullData.daily_return||0)<0?'text-danger':'text-gray-400'}">
+            ${(agentFullData.daily_return||0)>=0?'+':''}${(agentFullData.daily_return||0).toFixed(2)}%
+          </div>
+        </div>
+      </div>` : ''}
+
       <!-- Positions table -->
       <div class="bg-card border border-gray-800/60 rounded-2xl overflow-hidden">
         <div class="px-5 py-3 border-b border-gray-800/60">
@@ -330,7 +390,8 @@ async function openAgentDetail(agentId) {
               <tr>
                 <th class="px-5 py-3">종목</th>
                 <th class="px-5 py-3">시장</th>
-                <th class="px-5 py-3">매수가</th>
+                <th class="px-5 py-3 text-right">수량</th>
+                <th class="px-5 py-3 text-right">매수가</th>
                 <th class="px-5 py-3">상태</th>
                 <th class="px-5 py-3">섹터</th>
               </tr>
@@ -343,14 +404,57 @@ async function openAgentDetail(agentId) {
                   <span class="text-gray-600 ml-1">${p.ticker}</span>
                 </td>
                 <td class="px-5 py-3 text-gray-500">${p.market}</td>
-                <td class="px-5 py-3 text-gray-400">${(p.price || 0).toLocaleString()}</td>
+                <td class="px-5 py-3 text-right text-gray-400">${p.quantity != null ? p.quantity.toLocaleString() : '-'}</td>
+                <td class="px-5 py-3 text-right text-gray-400">${(p.price || 0).toLocaleString()}</td>
                 <td class="px-5 py-3 status-${p.status}">${{buy:'매수',hold:'보유',watch:'경계',closed:'종료'}[p.status] || p.status}</td>
                 <td class="px-5 py-3 text-gray-600">${p.sector || '-'}</td>
-              </tr>`).join('') || '<tr><td colspan="5" class="px-5 py-8 text-center text-gray-600">포지션 없음</td></tr>'}
+              </tr>`).join('') || '<tr><td colspan="6" class="px-5 py-8 text-center text-gray-600">포지션 없음</td></tr>'}
             </tbody>
           </table>
         </div>
       </div>
+
+      <!-- Postmortems -->
+      ${postmortems.length ? `
+      <div class="bg-card border border-gray-800/60 rounded-2xl overflow-hidden">
+        <div class="px-5 py-3 border-b border-gray-800/60">
+          <h4 class="text-xs font-bold text-gray-400 uppercase">사후 검증 (${postmortems.length})</h4>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-xs text-left data-table">
+            <thead class="bg-[#0f1117] text-gray-600 uppercase tracking-wider">
+              <tr>
+                <th class="px-5 py-3">종목</th>
+                <th class="px-5 py-3 text-right">수익률</th>
+                <th class="px-5 py-3 text-right">환율반영</th>
+                <th class="px-5 py-3">적중</th>
+                <th class="px-5 py-3">날짜</th>
+                <th class="px-5 py-3"></th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-800/40">
+              ${postmortems.map(pm => {
+                const pnl = pm.pnl_pct || 0;
+                const pnlClass = pnl > 0 ? 'text-success' : pnl < 0 ? 'text-danger' : 'text-gray-500';
+                const pnlKrw = pm.pnl_pct_krw;
+                const correct = pm.was_correct;
+                return `<tr class="hover:bg-white/[.025]">
+                  <td class="px-5 py-3 font-semibold text-white">${pm.ticker}</td>
+                  <td class="px-5 py-3 text-right ${pnlClass}">${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%</td>
+                  <td class="px-5 py-3 text-right ${pnlKrw != null ? (pnlKrw > 0 ? 'text-success' : pnlKrw < 0 ? 'text-danger' : 'text-gray-500') : 'text-gray-600'}">
+                    ${pnlKrw != null ? (pnlKrw >= 0 ? '+' : '') + pnlKrw.toFixed(2) + '%' : '-'}
+                  </td>
+                  <td class="px-5 py-3">
+                    ${correct === true ? '<span class="text-success font-bold">✓ 맞음</span>' : correct === false ? '<span class="text-danger font-bold">✗ 틀림</span>' : '<span class="text-gray-600">-</span>'}
+                  </td>
+                  <td class="px-5 py-3 text-gray-600">${formatTs(pm.created_at)}</td>
+                  <td class="px-5 py-3"><button onclick="openReportModal(${pm.id})" class="text-primary/60 hover:text-primary text-[10px]">리포트</button></td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>` : ''}
     </div>`;
 
   if (snapshots.length) {
@@ -466,7 +570,10 @@ function goToStock(ticker) {
 
 // ── Page: 데이터현황 ───────────────────────────────────────────
 async function loadDataStatus() {
-  const summary = await apiFetch('/api/dashboard/summary').catch(() => ({}));
+  const [summary, sectors] = await Promise.all([
+    apiFetch('/api/dashboard/summary').catch(() => ({})),
+    apiFetch('/api/dashboard/sectors').catch(() => []),
+  ]);
   const cost  = summary.api_cost || {};
   const snap  = summary.snapshot || {};
   const macro = (() => { try { return JSON.parse(snap.macro_data || '{}'); } catch { return {}; } })();
@@ -495,16 +602,34 @@ async function loadDataStatus() {
     snap.narrative_us ? `<p><span class="text-xs font-bold text-primary bg-primary/10 px-2 py-0.5 rounded mr-2">US</span><span class="text-sm text-gray-400">${snap.narrative_us}</span></p>` : '',
   ].filter(Boolean).join('');
   detail.innerHTML = rows || '<p class="text-gray-600 text-sm text-center py-4">데이터 없음 (매일 07:00 수집)</p>';
+
+  // Sector ETF table
+  const etfTbody = document.getElementById('sector-etf-table');
+  if (etfTbody) {
+    if (!sectors.length) {
+      etfTbody.innerHTML = '<tr><td colspan="6" class="px-5 py-8 text-center text-gray-600 text-xs">데이터 없음</td></tr>';
+    } else {
+      const retCell = (v) => {
+        if (v == null) return '<td class="px-5 py-3 text-right text-gray-600">—</td>';
+        const cls = v > 0 ? 'text-success' : v < 0 ? 'text-danger' : 'text-gray-500';
+        return `<td class="px-5 py-3 text-right ${cls}">${v >= 0 ? '+' : ''}${v.toFixed(2)}%</td>`;
+      };
+      etfTbody.innerHTML = sectors.map(s => `
+        <tr class="hover:bg-white/[.025]">
+          <td class="px-5 py-3">
+            <span class="text-[10px] font-bold px-1.5 py-0.5 rounded ${s.market === 'KR' ? 'bg-success/10 text-success' : 'bg-primary/10 text-primary'}">${s.market}</span>
+          </td>
+          <td class="px-5 py-3 font-mono text-white text-xs">${s.etf_ticker}</td>
+          <td class="px-5 py-3 text-gray-400">${s.etf_name || '-'}</td>
+          ${retCell(s.return_1d)}
+          ${retCell(s.return_5d)}
+          ${retCell(s.return_20d)}
+        </tr>`).join('');
+    }
+  }
 }
 
 // ── Init (스크립트가 body 하단에 있으므로 DOM 이미 준비됨) ──────
-document.getElementById('global-search')?.addEventListener('keydown', e => {
-  if (e.key === 'Enter') {
-    const v = e.target.value.trim();
-    if (v) { goToStock(v.toUpperCase()); e.target.value = ''; }
-  }
-});
-
 // 초기 메인 페이지 로드
 showPage('main');
 

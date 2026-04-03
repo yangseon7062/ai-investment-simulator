@@ -59,3 +59,27 @@ async def get_conflicts():
            ORDER BY created_at DESC LIMIT 20"""
     )
     return [dict(r) for r in debates]
+
+
+@router.get("/notifications")
+async def get_notifications():
+    """알림 — event_logs 최근 20건"""
+    rows = await fetchall(
+        """SELECT id, event_type, description, triggered_agents, created_at
+           FROM event_logs
+           ORDER BY created_at DESC LIMIT 20"""
+    )
+    return [dict(r) for r in rows]
+
+
+@router.get("/sectors")
+async def get_sectors():
+    """섹터 ETF 수익률 — 최근 거래일 기준"""
+    rows = await fetchall(
+        """SELECT market, etf_ticker, etf_name,
+                  return_1d, return_5d, return_20d, record_date
+           FROM sector_etf_history
+           WHERE record_date = (SELECT MAX(record_date) FROM sector_etf_history)
+           ORDER BY market, return_1d DESC"""
+    )
+    return [dict(r) for r in rows]

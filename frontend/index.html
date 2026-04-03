@@ -112,13 +112,17 @@
     </div>
     <div class="flex items-center gap-4">
       <div class="relative">
-        <span class="absolute left-3 top-1/2 -translate-y-1/2 material-symbols-outlined text-gray-500 text-sm">search</span>
-        <input id="global-search" type="text" class="bg-[#1a1d27] border-none rounded-lg py-2 pl-10 pr-4 text-sm w-64 focus:ring-1 focus:ring-primary outline-none" placeholder="종목, 에이전트 검색…"/>
+        <button id="notif-btn" onclick="toggleNotifications()" class="text-gray-400 hover:text-white transition-colors relative">
+          <span class="material-symbols-outlined">notifications</span>
+          <span id="notif-dot" class="notif-dot hidden"></span>
+        </button>
+        <div id="notif-dropdown" class="hidden absolute right-0 top-10 w-80 bg-card border border-[#2a2f3e] rounded-xl shadow-2xl overflow-hidden" style="z-index:100">
+          <div class="px-4 py-3 border-b border-[#2a2f3e]">
+            <span class="text-xs font-bold text-white uppercase tracking-wider">최근 이벤트</span>
+          </div>
+          <div id="notif-list" class="max-h-72 overflow-y-auto"></div>
+        </div>
       </div>
-      <button class="text-gray-400 hover:text-white transition-colors relative">
-        <span class="material-symbols-outlined">notifications</span>
-        <span class="absolute top-0 right-0 w-2 h-2 bg-danger rounded-full border-2 border-[#0f1117]"></span>
-      </button>
     </div>
   </header>
 
@@ -325,8 +329,32 @@
       </h3>
       <div id="data-status-grid" class="grid grid-cols-2 lg:grid-cols-4 gap-4"></div>
       <div class="bg-card border border-[#2a2f3e] rounded-2xl p-6">
-        <h4 class="text-sm font-bold text-gray-400 uppercase mb-4">API 사용 현황</h4>
+        <h4 class="text-sm font-bold text-gray-400 uppercase mb-4">시장 내러티브</h4>
         <div id="api-usage-detail" class="text-sm text-gray-500">로딩 중…</div>
+      </div>
+
+      <!-- 섹터 ETF 수익률 -->
+      <div class="bg-card border border-[#2a2f3e] rounded-2xl overflow-hidden">
+        <div class="px-6 py-4 border-b border-[#2a2f3e]">
+          <h4 class="text-sm font-bold text-gray-400 uppercase">섹터 ETF 수익률</h4>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-xs text-left data-table">
+            <thead class="bg-[#0f1117] text-gray-600 uppercase tracking-wider">
+              <tr>
+                <th class="px-5 py-3">시장</th>
+                <th class="px-5 py-3">ETF</th>
+                <th class="px-5 py-3">이름</th>
+                <th class="px-5 py-3 text-right">1일</th>
+                <th class="px-5 py-3 text-right">5일</th>
+                <th class="px-5 py-3 text-right">20일</th>
+              </tr>
+            </thead>
+            <tbody id="sector-etf-table" class="divide-y divide-gray-800/40">
+              <tr><td colspan="6" class="px-5 py-8 text-center text-gray-600">로딩 중…</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   </div>

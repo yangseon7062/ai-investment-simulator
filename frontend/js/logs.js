@@ -83,6 +83,16 @@ function thesisBadge(wasCorrect) {
     return `<span class="text-xs px-2 py-0.5 rounded-full font-medium ${cfg.cls}">${cfg.label}</span>`;
 }
 
+// ── Regime badge ──────────────────────────────────────────────
+function regimeBadge(market, regime) {
+    if (!regime) return '';
+    const cls = regime === '상승장' ? 'regime-up'
+              : regime === '하락장' ? 'regime-down'
+              : regime === '변동성급등' ? 'regime-vol'
+              : 'regime-side';
+    return `<span class="text-[9px] px-1.5 py-0.5 rounded-full font-bold ${cls}">${market} ${regime}</span>`;
+}
+
 // ── Render a single collapsible log card ──────────────────────
 function renderLogCard(log, index) {
     const summary = (log.thesis || log.report_md || '')
@@ -91,6 +101,11 @@ function renderLogCard(log, index) {
     const tickers = log.tickers
         ? `<span class="text-xs font-mono text-primary/80">${log.tickers}</span>`
         : '';
+
+    const regimes = [
+        regimeBadge('KR', log.market_regime_kr),
+        regimeBadge('US', log.market_regime_us),
+    ].filter(Boolean).join('');
 
     const bodyId = `log-body-${log.id || index}`;
 
@@ -101,6 +116,7 @@ function renderLogCard(log, index) {
             ${agentBadge(log.agent_id)}
             ${logTypeChip(log.log_type)}
             ${tickers}
+            ${regimes}
             <span class="ml-auto flex items-center gap-2 shrink-0">
                 ${thesisBadge(log.thesis_valid)}
                 <span class="text-xs text-gray-600">${formatTs(log.created_at)}</span>
