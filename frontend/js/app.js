@@ -498,10 +498,6 @@ async function loadDataStatus() {
 }
 
 // ── Init (스크립트가 body 하단에 있으므로 DOM 이미 준비됨) ──────
-document.getElementById('refresh-btn')?.addEventListener('click', () => {
-  loadPageData(currentPage || 'main');
-});
-
 document.getElementById('global-search')?.addEventListener('keydown', e => {
   if (e.key === 'Enter') {
     const v = e.target.value.trim();
