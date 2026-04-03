@@ -1,0 +1,3 @@
+c:\Users\Admin\Desktop\ai_투자 프로젝트의 AI 투자 시뮬레이터 포지션 모니터링을 실행해줘.
+
+`py -3 scripts/run_monitor.py` 실행해서 KR/US 포지션 모니터링 완료 확인하고 결과 요약해줘.

@@ -1,0 +1,6 @@
+c:\Users\Admin\Desktop\ai_투자 프로젝트의 AI 투자 시뮬레이터 에이전트 파이프라인을 실행해줘.
+
+다음 순서로 실행해:
+1. `py -3 scripts/run_data_collect.py` 실행해서 데이터 수집 + 스코어링 완료 확인
+2. `py -3 scripts/run_agents.py` 실행해서 7개 에이전트 투자 판단 실행
+3. 실행 결과 요약해줘 (각 에이전트 결정, 매수 종목, 오류 여부)

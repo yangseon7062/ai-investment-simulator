@@ -357,9 +357,14 @@ async def run_all_agents():
     }
 
     agents = get_all_agents()
-    tasks = [run_single_agent(agent, market_context) for agent in agents]
-    decisions = await asyncio.gather(*tasks, return_exceptions=True)
-    decisions = [d for d in decisions if isinstance(d, dict)]
+    decisions = []
+    for agent in agents:
+        try:
+            result = await run_single_agent(agent, market_context)
+            decisions.append(result)
+        except Exception as e:
+            print(f"  [{agent.agent_id}] 오류: {e}")
+        await asyncio.sleep(10)  # Groq TPM 한도 대응 (에이전트 간 10초 대기)
 
     print(f"[{datetime.now().strftime('%H:%M:%S')}] 후처리 시작")
 
