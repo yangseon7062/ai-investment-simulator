@@ -77,6 +77,7 @@ function showPage(pageId) {
   if (page) page.classList.add('active');
 
   document.querySelectorAll('.nav-link').forEach(n => {
+    n.classList.remove('nav-active');
     n.setAttribute('style', 'color:#9ca3af');
   });
   const active = document.querySelector(`.nav-link[data-page="${pageId}"]`);
