@@ -67,6 +67,11 @@ function loadPageData(pageId) {
 
 // ── Page: 메인 ─────────────────────────────────────────────────
 async function loadMain() {
+  // 로딩 스피너 표시
+  document.getElementById('banner-title').innerHTML =
+    '<span class="inline-flex items-center gap-2"><span class="material-symbols-outlined animate-spin text-lg align-middle">progress_activity</span>서버 응답 대기 중…</span>';
+  document.getElementById('banner-body').textContent = '(첫 로드 시 최대 30초 소요될 수 있습니다)';
+
   const [summary, portfolio, conflicts] = await Promise.all([
     apiFetch('/api/dashboard/summary').catch(() => ({})),
     apiFetch('/api/dashboard/portfolio').catch(() => []),
@@ -75,9 +80,9 @@ async function loadMain() {
 
   const snap = summary.snapshot || {};
 
-  // Daily summary banner
+  // 배너 업데이트
   document.getElementById('banner-title').textContent =
-    snap.daily_summary || '오늘 시장 요약 없음';
+    snap.daily_summary || '오늘 시장 요약 없음 (데이터 수집 전)';
   const narrative = [snap.narrative_kr, snap.narrative_us].filter(Boolean).join(' | ');
   document.getElementById('banner-body').textContent = narrative || '';
 

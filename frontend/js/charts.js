@@ -2,11 +2,17 @@
  * charts.js — Chart.js setup helpers + shared API fetch for AI 투자 시뮬레이터
  */
 
-// Shared API helper (needs to be available before logs.js and app.js)
+// Shared API helper — 15초 타임아웃 포함
 async function apiFetch(path, opts = {}) {
-  const r = await fetch(path, opts);
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
-  return r.json();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    const r = await fetch(path, { signal: controller.signal, ...opts });
+    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    return await r.json();
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // ── Shared chart defaults ──────────────────────────────────────
