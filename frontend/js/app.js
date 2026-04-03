@@ -31,21 +31,18 @@ function closeModal() {
 
 // ── Navigation ─────────────────────────────────────────────────
 function showPage(pageId) {
-  document.querySelectorAll('.page').forEach(p => {
-    p.classList.add('hidden');
-    p.classList.remove('block');
-  });
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   const page = document.getElementById('page-' + pageId);
-  if (page) { page.classList.remove('hidden'); page.classList.add('block'); }
+  if (page) page.classList.add('active');
 
   document.querySelectorAll('.nav-link').forEach(n => {
-    n.classList.remove('text-primary','bg-primary/10','font-semibold');
-    n.classList.add('text-gray-500');
+    n.classList.remove('nav-active');
+    n.classList.add('text-gray-400');
   });
   const active = document.querySelector(`.nav-link[data-page="${pageId}"]`);
   if (active) {
-    active.classList.add('text-primary','bg-primary/10','font-semibold');
-    active.classList.remove('text-gray-500');
+    active.classList.add('nav-active');
+    active.classList.remove('text-gray-400');
   }
 
   const title = document.getElementById('page-title');
@@ -74,9 +71,11 @@ async function loadMain() {
 
   const snap = summary.snapshot || {};
 
-  // Daily summary text
-  document.getElementById('daily-summary-text').textContent =
+  // Daily summary banner
+  document.getElementById('banner-title').textContent =
     snap.daily_summary || '오늘 시장 요약 없음';
+  const narrative = [snap.narrative_kr, snap.narrative_us].filter(Boolean).join(' | ');
+  document.getElementById('banner-body').textContent = narrative || '';
 
   // Last updated
   const lu = document.getElementById('last-updated');
@@ -135,26 +134,27 @@ function renderAgentCards(agents) {
   const map = {};
   agents.forEach(a => { map[a.agent_id] = a; });
 
+  // Stitch 원본 카드 스타일 그대로
   el.innerHTML = AGENTS.map(agent => {
     const a = map[agent.id] || {};
     const ret = a.total_return || 0;
     const sign = ret >= 0 ? '+' : '';
-    const retColor = ret > 0 ? 'text-success' : ret < 0 ? 'text-danger' : 'text-gray-400';
+    const retColor = ret > 0 ? 'text-success' : ret < 0 ? 'text-danger' : 'text-warning';
     return `
-    <div class="bg-card border border-gray-800/60 rounded-xl p-3.5 cursor-pointer agent-card-hover transition-all"
+    <div class="bg-card p-4 rounded-xl border border-[#2a2f3e] hover:border-primary/50 transition-all group cursor-pointer"
          onclick="openAgentDetail('${agent.id}')">
-      <div class="flex items-center justify-between mb-3">
-        <div class="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
-             style="background:${agent.color}22">
+      <div class="flex items-center justify-between mb-4">
+        <div class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 group-hover:bg-primary transition-colors"
+             style="background:${agent.color}33">
           <span class="material-symbols-outlined text-sm" style="color:${agent.color}">${agent.icon}</span>
         </div>
         <span class="${retColor} text-xs font-bold">${sign}${ret.toFixed(2)}%</span>
       </div>
-      <p class="text-xs font-bold text-white truncate">${agent.name}</p>
-      <p class="text-[10px] text-gray-600 mt-0.5">${agent.style}</p>
-      <div class="mt-2 flex items-center justify-between">
-        <span class="text-[10px] text-gray-600">${(a.open_positions || 0)}종목</span>
-        <span class="text-[10px] text-gray-600">${a.cash_balance_krw != null ? (a.cash_balance_krw/1e8).toFixed(2)+'억' : '-'}</span>
+      <p class="text-xs font-bold text-white">${agent.name}</p>
+      <p class="text-[10px] text-gray-500 uppercase tracking-tighter">${agent.style}</p>
+      <div class="mt-2 pt-2 border-t border-[#2a2f3e] flex justify-between text-[10px] text-gray-600">
+        <span>${(a.open_positions || 0)}종목</span>
+        <span>${a.cash_balance_krw != null ? (a.cash_balance_krw/1e8).toFixed(1)+'억' : '—'}</span>
       </div>
     </div>`;
   }).join('');
@@ -188,14 +188,16 @@ function renderConflicts(conflicts) {
     el.innerHTML = '<p class="text-xs text-gray-600 py-2">충돌 없음</p>';
     return;
   }
-  el.innerHTML = conflicts.slice(0, 6).map(c => `
-    <div class="p-3 rounded-lg border cursor-pointer hover:opacity-90 transition-opacity ${c.is_conflict ? 'bg-danger/5 border-danger/20' : 'bg-success/5 border-success/20'}"
+  // Stitch 원본 충돌 카드 스타일
+  el.innerHTML = conflicts.slice(0, 4).map(c => `
+    <div class="p-4 rounded-xl border cursor-pointer hover:opacity-90 transition-opacity ${c.is_conflict ? 'bg-danger/5 border-danger/20' : 'bg-success/5 border-success/20'}"
          onclick="openReportModal(${c.id})">
-      <div class="flex items-center gap-1.5 mb-1">
-        <span class="text-[10px] font-bold ${c.is_conflict ? 'text-danger' : 'text-success'}">${c.is_conflict ? '충돌' : '동의'}</span>
-        <span class="text-[10px] font-mono text-primary/80">${c.tickers || ''}</span>
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-[10px] font-bold uppercase ${c.is_conflict ? 'text-danger' : 'text-success'}">${c.is_conflict ? '의견 대립' : '강한 합의'}</span>
+        <span class="text-[10px] font-mono text-primary/70">${c.tickers || ''}</span>
       </div>
-      <p class="text-[10px] text-gray-500 truncate">${(c.summary || '').slice(0, 60)}</p>
+      <p class="text-sm font-bold text-white mb-1 truncate">${(c.summary || '').slice(0, 40) || '—'}</p>
+      <p class="text-xs text-gray-400 leading-relaxed truncate">${(c.summary || '').slice(40, 100)}</p>
     </div>`).join('');
 }
 
@@ -206,17 +208,28 @@ function renderUnifiedPortfolio(portfolio) {
     el.innerHTML = '<tr><td colspan="4" class="px-5 py-8 text-center text-gray-600 text-xs">포트폴리오 없음</td></tr>';
     return;
   }
+  // Stitch 원본 포트폴리오 row 스타일
   el.innerHTML = portfolio.slice(0, 10).map(p => {
-    const agentColor = p.agent_count >= 4 ? 'text-primary font-bold' : p.agent_count >= 2 ? 'text-gray-300' : 'text-gray-600';
+    const agentCount = p.agent_count || 0;
+    const countColor = agentCount >= 4 ? 'text-primary font-bold' : agentCount >= 2 ? 'text-gray-300' : 'text-gray-500';
+    const statusBg = agentCount >= 3 ? 'bg-success/10 text-success' : 'bg-gray-800 text-gray-400';
     return `
-    <tr class="hover:bg-white/[.025] transition-colors cursor-pointer" onclick="goToStock('${p.ticker}')">
-      <td class="px-5 py-3">
-        <span class="font-semibold text-white text-xs">${p.name || p.ticker}</span>
-        <span class="text-[10px] text-gray-600 ml-1">${p.ticker}</span>
+    <tr class="hover:bg-white/5 transition-colors cursor-pointer" onclick="goToStock('${p.ticker}')">
+      <td class="px-6 py-4">
+        <div class="flex items-center gap-3">
+          <div class="w-8 h-8 bg-[#2a2f3e] rounded flex items-center justify-center text-[10px] font-bold text-white">${(p.ticker||'').slice(0,4)}</div>
+          <div>
+            <p class="text-sm font-bold text-white">${p.name || p.ticker}</p>
+            <p class="text-[10px] text-gray-500">${p.market}</p>
+          </div>
+        </div>
       </td>
-      <td class="px-5 py-3 text-[10px] text-gray-500">${p.market}</td>
-      <td class="px-5 py-3 text-[10px] text-gray-600">${p.sector || '-'}</td>
-      <td class="px-5 py-3 text-xs ${agentColor}">${p.agent_count}명</td>
+      <td class="px-6 py-4 text-sm text-gray-400">${p.market}</td>
+      <td class="px-6 py-4 text-sm text-gray-500">${p.sector || '—'}</td>
+      <td class="px-6 py-4 text-sm ${countColor}">${agentCount}명 보유</td>
+      <td class="px-6 py-4 text-right">
+        <span class="px-2 py-1 text-[10px] font-bold rounded ${statusBg}">${agentCount >= 3 ? 'HOT' : 'HOLD'}</span>
+      </td>
     </tr>`;
   }).join('');
 }

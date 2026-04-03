@@ -1,292 +1,354 @@
 <!DOCTYPE html>
-<html lang="ko" class="dark">
+<html class="dark" lang="ko">
 <head>
-  <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>AI 투자 시뮬레이터</title>
-  <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet"/>
-  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
-  <link href="/css/style.css" rel="stylesheet"/>
-  <script id="tailwind-config">
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>AI 투자 시뮬레이터</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<link href="/css/style.css" rel="stylesheet"/>
+<script id="tailwind-config">
     tailwind.config = {
-      darkMode: "class",
-      theme: {
-        extend: {
-          colors: {
-            primary:    "#7c6aff",
-            background: "#0f1117",
-            card:       "#1a1d27",
-            success:    "#22c55e",
-            danger:     "#ef4444",
-            warning:    "#f59e0b",
-          },
-          fontFamily: { body: ["Inter","sans-serif"], headline: ["Inter","sans-serif"] },
-          borderRadius: { DEFAULT:"0.25rem", lg:"0.5rem", xl:"0.75rem", full:"9999px" },
+        darkMode: "class",
+        theme: {
+            extend: {
+                colors: {
+                    primary: "#7c6aff",
+                    background: "#0f1117",
+                    card: "#1a1d27",
+                    success: "#22c55e",
+                    danger: "#ef4444",
+                    warning: "#f59e0b",
+                },
+                fontFamily: {
+                    "headline": ["Inter", "sans-serif"],
+                    "body": ["Inter", "sans-serif"],
+                    "label": ["Inter", "sans-serif"]
+                },
+                borderRadius: {
+                    "DEFAULT": "0.25rem",
+                    "lg": "0.5rem",
+                    "xl": "0.75rem",
+                    "full": "9999px"
+                },
+            },
         },
-      },
     }
-  </script>
-  <style>
-    .material-symbols-outlined { font-variation-settings:'FILL' 0,'wght' 400,'GRAD' 0,'opsz' 24; }
-    body { background-color:#0f1117; color:#e2e8f0; font-family:Inter,sans-serif; }
-  </style>
+</script>
+<style>
+    .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+    body { background-color: #0f1117; color: #e2e8f0; }
+    .page { display: none; }
+    .page.active { display: block; }
+    .nav-active { color: #7c6aff !important; background: rgba(124,106,255,.1); border-right: 2px solid #7c6aff; font-weight: 600; }
+    .log-body { display: none; }
+    .log-body.open { display: block; }
+</style>
 </head>
-<body class="antialiased">
+<body class="font-body antialiased">
 
-<!-- ── SIDEBAR ──────────────────────────────────────────────────── -->
-<aside class="fixed left-0 top-0 h-full w-60 border-r border-gray-800/60 bg-[#0c0e17] flex flex-col z-50">
-  <div class="p-5">
+<!-- ═══════════════════════════════════════════════════════════════
+     SIDEBAR (Stitch 원본 구조 그대로)
+════════════════════════════════════════════════════════════════ -->
+<aside class="fixed left-0 top-0 h-full w-64 border-r border-[#1a1d27] bg-[#0f1117] flex flex-col z-50">
+  <div class="p-6">
     <!-- Logo -->
-    <div class="flex items-center gap-3 mb-7">
-      <div class="w-9 h-9 bg-primary rounded-lg flex items-center justify-center shrink-0">
-        <span class="material-symbols-outlined text-white text-base">insights</span>
+    <div class="flex items-center gap-3 mb-8">
+      <div class="w-10 h-10 bg-primary rounded-lg flex items-center justify-center">
+        <span class="material-symbols-outlined text-white">insights</span>
       </div>
       <div>
-        <h1 class="text-sm font-bold text-primary leading-tight">AI 투자 시뮬레이터</h1>
-        <p class="text-[10px] text-gray-600">7 Agents · Claude + Groq</p>
+        <h1 class="text-base font-bold text-[#7c6aff] tracking-tight">AI 투자 시뮬레이터</h1>
+        <p class="text-xs text-gray-500">7 Agents · Claude + Groq</p>
       </div>
     </div>
 
     <!-- Nav -->
-    <nav class="space-y-0.5" id="sidebar-nav">
-      <a class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm cursor-pointer transition-all" data-page="main">
-        <span class="material-symbols-outlined text-base">dashboard</span><span>메인</span>
+    <nav class="space-y-1">
+      <a class="nav-link nav-active flex items-center gap-3 px-4 py-3 transition-all cursor-pointer rounded-lg" data-page="main">
+        <span class="material-symbols-outlined">dashboard</span><span>메인</span>
       </a>
-      <a class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm cursor-pointer transition-all" data-page="agents">
-        <span class="material-symbols-outlined text-base">smart_toy</span><span>에이전트</span>
+      <a class="nav-link flex items-center gap-3 px-4 py-3 text-gray-400 hover:text-gray-200 hover:bg-[#1a1d27] transition-all cursor-pointer rounded-lg" data-page="agents">
+        <span class="material-symbols-outlined">smart_toy</span><span>에이전트</span>
       </a>
-      <a class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm cursor-pointer transition-all" data-page="logs">
-        <span class="material-symbols-outlined text-base">history_edu</span><span>로그</span>
+      <a class="nav-link flex items-center gap-3 px-4 py-3 text-gray-400 hover:text-gray-200 hover:bg-[#1a1d27] transition-all cursor-pointer rounded-lg" data-page="logs">
+        <span class="material-symbols-outlined">history_edu</span><span>로그</span>
       </a>
-      <a class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm cursor-pointer transition-all" data-page="stocks">
-        <span class="material-symbols-outlined text-base">show_chart</span><span>종목뷰</span>
+      <a class="nav-link flex items-center gap-3 px-4 py-3 text-gray-400 hover:text-gray-200 hover:bg-[#1a1d27] transition-all cursor-pointer rounded-lg" data-page="stocks">
+        <span class="material-symbols-outlined">show_chart</span><span>종목뷰</span>
       </a>
-      <a class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm cursor-pointer transition-all" data-page="debate">
-        <span class="material-symbols-outlined text-base">forum</span><span>토론</span>
+      <a class="nav-link flex items-center gap-3 px-4 py-3 text-gray-400 hover:text-gray-200 hover:bg-[#1a1d27] transition-all cursor-pointer rounded-lg" data-page="debate">
+        <span class="material-symbols-outlined">forum</span><span>토론</span>
       </a>
-      <a class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm cursor-pointer transition-all" data-page="roundtable">
-        <span class="material-symbols-outlined text-base">groups</span><span>라운드테이블</span>
+      <a class="nav-link flex items-center gap-3 px-4 py-3 text-gray-400 hover:text-gray-200 hover:bg-[#1a1d27] transition-all cursor-pointer rounded-lg" data-page="roundtable">
+        <span class="material-symbols-outlined">groups</span><span>라운드테이블</span>
       </a>
-      <a class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm cursor-pointer transition-all" data-page="data">
-        <span class="material-symbols-outlined text-base">database</span><span>데이터현황</span>
+      <a class="nav-link flex items-center gap-3 px-4 py-3 text-gray-400 hover:text-gray-200 hover:bg-[#1a1d27] transition-all cursor-pointer rounded-lg" data-page="data">
+        <span class="material-symbols-outlined">database</span><span>데이터현황</span>
       </a>
     </nav>
   </div>
 
-  <!-- API Cost footer -->
-  <div class="mt-auto p-5 border-t border-gray-800/60">
-    <div class="text-[10px] text-gray-600 uppercase tracking-wider mb-1.5">이번달 API 비용</div>
-    <div id="sidebar-cost" class="text-lg font-bold text-primary">$0.000</div>
-    <div id="sidebar-cost-meta" class="text-[10px] text-gray-600">0회 호출</div>
+  <!-- Bottom: API 비용 -->
+  <div class="mt-auto p-6 border-t border-[#1a1d27]">
+    <p class="text-[10px] text-gray-600 uppercase tracking-wider mb-1">이번달 API 비용</p>
+    <p id="sidebar-cost" class="text-xl font-bold text-primary">$—</p>
+    <p id="sidebar-cost-meta" class="text-xs text-gray-600 mt-0.5">— 회 호출</p>
   </div>
 </aside>
 
-<!-- ── MAIN ──────────────────────────────────────────────────────── -->
-<main class="ml-60 min-h-screen flex flex-col">
+<!-- ═══════════════════════════════════════════════════════════════
+     MAIN WRAPPER
+════════════════════════════════════════════════════════════════ -->
+<main class="ml-64 min-h-screen">
 
-  <!-- Top Header -->
-  <header class="sticky top-0 z-40 flex items-center justify-between px-6 h-14 bg-[#0f1117]/90 backdrop-blur border-b border-gray-800/60">
-    <div class="flex items-center gap-4">
-      <h2 id="page-title" class="text-xs font-semibold text-gray-300 uppercase tracking-widest">메인</h2>
-      <div id="regime-badges" class="flex items-center gap-2"></div>
+  <!-- Top Header (Stitch 원본 구조) -->
+  <header class="sticky top-0 z-40 flex items-center justify-between px-8 h-16 bg-[#0f1117]/80 backdrop-blur-md border-b border-[#1a1d27]">
+    <div class="flex items-center gap-6">
+      <h2 id="page-title" class="text-sm font-medium text-white uppercase tracking-wider">투자 대시보드</h2>
+      <div id="regime-badges" class="flex items-center gap-4 border-l border-[#1a1d27] pl-6"></div>
     </div>
-    <div class="flex items-center gap-3">
+    <div class="flex items-center gap-4">
       <div class="relative">
-        <span class="absolute left-3 top-1/2 -translate-y-1/2 material-symbols-outlined text-gray-600 text-sm">search</span>
-        <input id="global-search" type="text" placeholder="종목·에이전트 검색…"
-               class="bg-card border border-gray-800 rounded-lg py-1.5 pl-9 pr-4 text-xs w-52 focus:ring-1 focus:ring-primary outline-none text-gray-300 placeholder-gray-600"/>
+        <span class="absolute left-3 top-1/2 -translate-y-1/2 material-symbols-outlined text-gray-500 text-sm">search</span>
+        <input id="global-search" type="text" class="bg-[#1a1d27] border-none rounded-lg py-2 pl-10 pr-4 text-sm w-64 focus:ring-1 focus:ring-primary outline-none" placeholder="종목, 에이전트 검색…"/>
       </div>
-      <button id="refresh-btn" class="text-gray-500 hover:text-primary transition-colors" title="새로고침">
-        <span class="material-symbols-outlined text-lg">refresh</span>
+      <button class="text-gray-400 hover:text-white transition-colors relative">
+        <span class="material-symbols-outlined">notifications</span>
+        <span class="absolute top-0 right-0 w-2 h-2 bg-danger rounded-full border-2 border-[#0f1117]"></span>
       </button>
-      <div class="relative">
-        <span class="material-symbols-outlined text-gray-500 hover:text-primary cursor-pointer transition-colors text-lg">notifications</span>
-        <span class="notif-dot"></span>
-      </div>
+      <button id="refresh-btn" class="text-gray-400 hover:text-white transition-colors" title="새로고침">
+        <span class="material-symbols-outlined">refresh</span>
+      </button>
     </div>
   </header>
 
-  <!-- ── PAGE: 메인 ─────────────────────────────────────────────── -->
-  <div id="page-main" class="page p-6 space-y-6">
+  <!-- ══════════════════════════════════════════════════════════
+       PAGE: 메인 (Stitch 원본 레이아웃 + 우리 데이터)
+  ══════════════════════════════════════════════════════════ -->
+  <div id="page-main" class="page active">
+    <div class="p-8 space-y-8">
 
-    <!-- Daily summary banner -->
-    <div id="daily-summary"
-         class="relative overflow-hidden rounded-2xl bg-gradient-to-br from-primary via-[#6351e6] to-[#4c3cc7] p-6 text-white shadow-2xl min-h-[72px] flex items-center">
-      <span class="material-symbols-outlined text-white/30 text-[6rem] absolute -right-6 -top-4 pointer-events-none">auto_awesome</span>
-      <div class="relative z-10">
-        <div class="flex items-center gap-2 text-[10px] font-bold bg-white/20 rounded-full px-3 py-1 w-fit mb-2">
-          <span class="material-symbols-outlined text-xs">bolt</span>오늘의 한 줄 요약
+      <!-- Banner (Stitch 원본 구조) -->
+      <section class="relative overflow-hidden rounded-2xl bg-gradient-to-br from-primary via-[#6351e6] to-[#4c3cc7] p-8 text-white shadow-2xl">
+        <div class="absolute right-0 top-0 w-1/3 h-full opacity-20 pointer-events-none">
+          <span class="material-symbols-outlined text-[12rem] absolute -right-10 -top-10">bolt</span>
         </div>
-        <p id="daily-summary-text" class="text-sm font-medium max-w-3xl leading-relaxed">로딩 중…</p>
-      </div>
-    </div>
+        <div class="relative z-10">
+          <div class="inline-flex items-center gap-2 bg-white/20 backdrop-blur-sm px-3 py-1 rounded-full text-xs font-bold mb-4">
+            <span class="material-symbols-outlined text-xs">auto_awesome</span>오늘의 요약
+          </div>
+          <h3 id="banner-title" class="text-2xl font-extrabold mb-2">로딩 중…</h3>
+          <p id="banner-body" class="text-white/80 max-w-2xl leading-relaxed text-sm"></p>
+        </div>
+      </section>
 
-    <!-- Agent Cards -->
-    <section>
-      <div class="flex items-center justify-between mb-3">
-        <h3 class="text-sm font-bold text-white flex items-center gap-2">
-          <span class="material-symbols-outlined text-primary text-base">precision_manufacturing</span>에이전트 실적
-        </h3>
-        <span class="text-xs text-gray-600" id="last-updated"></span>
-      </div>
-      <div id="agent-cards" class="grid grid-cols-7 gap-3"></div>
-    </section>
+      <!-- Agent Performance Grid (Stitch 원본 구조) -->
+      <section>
+        <div class="flex items-center justify-between mb-6">
+          <h4 class="text-lg font-bold flex items-center gap-2">
+            <span class="material-symbols-outlined text-primary">precision_manufacturing</span>에이전트 실적
+          </h4>
+          <span id="last-updated" class="text-xs text-gray-500"></span>
+        </div>
+        <div id="agent-cards" class="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-7 gap-4"></div>
+      </section>
 
-    <!-- Chart + Conflict -->
-    <div class="grid grid-cols-3 gap-5">
-      <!-- Performance chart -->
-      <div class="col-span-2 bg-card rounded-2xl p-5 border border-gray-800/60">
-        <div class="flex items-center justify-between mb-4">
-          <div>
-            <h4 class="text-sm font-bold text-white">누적 수익률</h4>
-            <p class="text-xs text-gray-600">기준 자산 대비 (%)</p>
+      <!-- Chart + Conflict (Stitch 원본 3:1 비율) -->
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+
+        <!-- 누적 수익률 차트 -->
+        <div class="lg:col-span-2 bg-card rounded-2xl p-6 border border-[#2a2f3e]">
+          <div class="flex items-center justify-between mb-6">
+            <div>
+              <h4 class="text-white font-bold">수익률 추이</h4>
+              <p class="text-xs text-gray-500">누적 시뮬레이션 수익률</p>
+            </div>
+          </div>
+          <div class="h-64"><canvas id="performance-chart"></canvas></div>
+        </div>
+
+        <!-- 동의·충돌 (Stitch 원본 구조) -->
+        <div class="bg-card rounded-2xl border border-[#2a2f3e] flex flex-col">
+          <div class="p-6 border-b border-[#2a2f3e]">
+            <h4 class="text-white font-bold flex items-center gap-2">
+              <span class="material-symbols-outlined text-warning">psychology_alt</span>에이전트 의사결정
+            </h4>
+          </div>
+          <div id="conflicts-list" class="flex-1 p-6 space-y-4 overflow-y-auto"></div>
+          <div class="p-4 border-t border-[#2a2f3e]">
+            <button onclick="showPage('debate')" class="w-full py-2 border border-[#2a2f3e] text-xs font-bold text-gray-400 rounded-lg hover:bg-[#2a2f3e] transition-colors">
+              토론 로그 전체 보기
+            </button>
           </div>
         </div>
-        <div class="h-56"><canvas id="performance-chart"></canvas></div>
       </div>
 
-      <!-- Conflict / Agreement -->
-      <div class="bg-card rounded-2xl border border-gray-800/60 flex flex-col overflow-hidden">
-        <div class="p-4 border-b border-gray-800/60 flex items-center gap-2">
-          <span class="material-symbols-outlined text-warning text-base">psychology_alt</span>
-          <h4 class="text-sm font-bold text-white">동의·충돌</h4>
+      <!-- Portfolio Table (Stitch 원본 구조) -->
+      <section class="bg-card rounded-2xl border border-[#2a2f3e] overflow-hidden">
+        <div class="p-6 border-b border-[#2a2f3e] flex items-center justify-between">
+          <h4 class="text-white font-bold">통합 포트폴리오</h4>
         </div>
-        <div id="conflicts-list" class="flex-1 p-4 space-y-3 overflow-y-auto text-xs"></div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left">
+            <thead>
+              <tr class="text-xs text-gray-500 uppercase tracking-wider bg-[#0f1117]">
+                <th class="px-6 py-4 font-bold">종목명</th>
+                <th class="px-6 py-4 font-bold">시장</th>
+                <th class="px-6 py-4 font-bold">섹터</th>
+                <th class="px-6 py-4 font-bold">보유 에이전트</th>
+                <th class="px-6 py-4 font-bold text-right">상태</th>
+              </tr>
+            </thead>
+            <tbody id="unified-portfolio" class="divide-y divide-[#2a2f3e]"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- 최근 로그 -->
+      <section>
+        <h4 class="text-white font-bold mb-4 flex items-center gap-2">
+          <span class="material-symbols-outlined text-primary">history</span>최근 로그
+        </h4>
+        <div id="recent-logs" class="space-y-2"></div>
+      </section>
+
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════
+       PAGE: 에이전트
+  ══════════════════════════════════════════════════════════ -->
+  <div id="page-agents" class="page">
+    <div class="p-8 space-y-6">
+      <!-- Agent selector tabs -->
+      <div class="flex gap-2 flex-wrap" id="agent-selector"></div>
+      <!-- Detail area -->
+      <div id="agent-detail">
+        <div class="text-gray-500 text-sm py-8 text-center">에이전트를 선택하세요</div>
       </div>
     </div>
+  </div>
 
-    <!-- Portfolio table -->
-    <section class="bg-card rounded-2xl border border-gray-800/60 overflow-hidden">
-      <div class="px-5 py-4 border-b border-gray-800/60">
-        <h4 class="text-sm font-bold text-white">통합 포트폴리오</h4>
+  <!-- ══════════════════════════════════════════════════════════
+       PAGE: 로그
+  ══════════════════════════════════════════════════════════ -->
+  <div id="page-logs" class="page">
+    <div class="p-8 space-y-5">
+      <!-- Filters (Stitch card style) -->
+      <div class="bg-card border border-[#2a2f3e] rounded-2xl p-5 flex flex-wrap gap-3">
+        <select id="log-agent-filter" onchange="loadLogs()"
+                class="bg-[#0f1117] border border-[#2a2f3e] rounded-lg px-3 py-2 text-sm text-gray-300 outline-none focus:ring-1 focus:ring-primary">
+          <option value="">전체 에이전트</option>
+          <option value="macro">매크로</option>
+          <option value="strategist">전략가</option>
+          <option value="analyst">심사역</option>
+          <option value="surfer">서퍼</option>
+          <option value="explorer">미래탐색자</option>
+          <option value="contrarian">컨트라리안</option>
+          <option value="bear">베어</option>
+        </select>
+        <select id="log-type-filter" onchange="loadLogs()"
+                class="bg-[#0f1117] border border-[#2a2f3e] rounded-lg px-3 py-2 text-sm text-gray-300 outline-none focus:ring-1 focus:ring-primary">
+          <option value="">전체 유형</option>
+          <option value="research">조사</option>
+          <option value="buy">매수</option>
+          <option value="sell">매도</option>
+          <option value="monitor">모니터</option>
+          <option value="pass">관망</option>
+          <option value="postmortem">사후검증</option>
+          <option value="debate">토론</option>
+          <option value="roundtable">라운드테이블</option>
+        </select>
+        <button onclick="loadLogs()" class="bg-primary/10 text-primary border border-primary/30 rounded-lg px-5 py-2 text-sm hover:bg-primary/20 transition-colors font-medium">
+          조회
+        </button>
       </div>
-      <div class="overflow-x-auto">
-        <table class="w-full text-xs text-left data-table">
-          <thead class="bg-[#0f1117] text-gray-600 uppercase tracking-wider">
-            <tr>
-              <th class="px-5 py-3">종목</th>
-              <th class="px-5 py-3">시장</th>
-              <th class="px-5 py-3">섹터</th>
-              <th class="px-5 py-3">보유 에이전트</th>
-            </tr>
-          </thead>
-          <tbody id="unified-portfolio" class="divide-y divide-gray-800/40"></tbody>
-        </table>
+      <div id="logs-list" class="space-y-2"></div>
+      <div class="text-center">
+        <button id="load-more-btn" onclick="loadMoreLogs()"
+                class="hidden bg-card border border-[#2a2f3e] rounded-xl px-6 py-3 text-sm text-gray-400 hover:text-white hover:border-gray-600 transition-colors">
+          더 보기
+        </button>
       </div>
-    </section>
+    </div>
+  </div>
 
-    <!-- Recent logs -->
-    <section>
-      <h3 class="text-sm font-bold text-white mb-3 flex items-center gap-2">
-        <span class="material-symbols-outlined text-primary text-base">history</span>최근 로그
+  <!-- ══════════════════════════════════════════════════════════
+       PAGE: 종목뷰
+  ══════════════════════════════════════════════════════════ -->
+  <div id="page-stocks" class="page">
+    <div class="p-8 space-y-6">
+      <div class="flex gap-3">
+        <input id="stock-search" type="text" placeholder="종목 코드 입력 (예: 005930, NVDA)"
+               class="bg-card border border-[#2a2f3e] rounded-xl px-4 py-3 text-sm text-gray-300 w-80 outline-none focus:ring-1 focus:ring-primary placeholder-gray-600"
+               onkeydown="if(event.key==='Enter') searchStock()"/>
+        <button onclick="searchStock()"
+                class="bg-primary text-white rounded-xl px-6 py-3 text-sm font-semibold hover:opacity-90 transition-opacity">
+          조회
+        </button>
+      </div>
+      <div id="stock-matrix"></div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════
+       PAGE: 토론
+  ══════════════════════════════════════════════════════════ -->
+  <div id="page-debate" class="page">
+    <div class="p-8 space-y-4">
+      <h3 class="text-lg font-bold text-white flex items-center gap-2">
+        <span class="material-symbols-outlined text-primary">forum</span>에이전트 간 충돌 토론
       </h3>
-      <div id="recent-logs"></div>
-    </section>
-  </div>
-
-  <!-- ── PAGE: 에이전트 ─────────────────────────────────────────── -->
-  <div id="page-agents" class="page hidden p-6 space-y-5">
-    <div class="flex gap-2 flex-wrap" id="agent-selector"></div>
-    <div id="agent-detail"></div>
-  </div>
-
-  <!-- ── PAGE: 로그 ─────────────────────────────────────────────── -->
-  <div id="page-logs" class="page hidden p-6">
-    <div class="flex flex-wrap gap-3 mb-5">
-      <select id="log-agent-filter" onchange="loadLogs()"
-              class="bg-card border border-gray-800 rounded-lg px-3 py-2 text-xs text-gray-300 outline-none focus:ring-1 focus:ring-primary">
-        <option value="">전체 에이전트</option>
-        <option value="macro">매크로</option>
-        <option value="strategist">전략가</option>
-        <option value="analyst">심사역</option>
-        <option value="surfer">서퍼</option>
-        <option value="explorer">미래탐색자</option>
-        <option value="contrarian">컨트라리안</option>
-        <option value="bear">베어</option>
-      </select>
-      <select id="log-type-filter" onchange="loadLogs()"
-              class="bg-card border border-gray-800 rounded-lg px-3 py-2 text-xs text-gray-300 outline-none focus:ring-1 focus:ring-primary">
-        <option value="">전체 유형</option>
-        <option value="research">조사</option>
-        <option value="buy">매수</option>
-        <option value="sell">매도</option>
-        <option value="monitor">모니터</option>
-        <option value="pass">관망</option>
-        <option value="postmortem">사후검증</option>
-        <option value="debate">토론</option>
-        <option value="roundtable">라운드테이블</option>
-      </select>
-      <button onclick="loadLogs()" class="bg-primary/10 text-primary border border-primary/30 rounded-lg px-4 py-2 text-xs hover:bg-primary/20 transition-colors">
-        조회
-      </button>
-    </div>
-    <div id="logs-list" class="space-y-2"></div>
-    <div class="text-center mt-5">
-      <button id="load-more-logs" onclick="loadMoreLogs()"
-              class="bg-card border border-gray-800 rounded-lg px-6 py-2 text-xs text-gray-400 hover:text-white hover:border-gray-600 transition-colors hidden">
-        더 보기
-      </button>
+      <div id="debate-list" class="space-y-2"></div>
     </div>
   </div>
 
-  <!-- ── PAGE: 종목뷰 ───────────────────────────────────────────── -->
-  <div id="page-stocks" class="page hidden p-6 space-y-5">
-    <div class="flex gap-3">
-      <input id="stock-search" type="text" placeholder="종목 코드 입력 (예: 005930, NVDA)"
-             class="bg-card border border-gray-800 rounded-lg px-4 py-2 text-sm text-gray-300 w-72 outline-none focus:ring-1 focus:ring-primary placeholder-gray-600"
-             onkeydown="if(event.key==='Enter') searchStock()"/>
-      <button onclick="searchStock()"
-              class="bg-primary text-white rounded-lg px-5 py-2 text-sm font-medium hover:opacity-90 transition-opacity">
-        조회
-      </button>
+  <!-- ══════════════════════════════════════════════════════════
+       PAGE: 라운드테이블
+  ══════════════════════════════════════════════════════════ -->
+  <div id="page-roundtable" class="page">
+    <div class="p-8 space-y-4">
+      <h3 class="text-lg font-bold text-white flex items-center gap-2">
+        <span class="material-symbols-outlined text-primary">groups</span>주간 라운드테이블
+      </h3>
+      <div id="roundtable-list" class="space-y-2"></div>
     </div>
-    <div id="stock-matrix"></div>
   </div>
 
-  <!-- ── PAGE: 토론 ─────────────────────────────────────────────── -->
-  <div id="page-debate" class="page hidden p-6 space-y-3">
-    <h3 class="text-sm font-bold text-white flex items-center gap-2">
-      <span class="material-symbols-outlined text-primary text-base">forum</span>에이전트 간 충돌 토론
-    </h3>
-    <div id="debate-list" class="space-y-2"></div>
-  </div>
-
-  <!-- ── PAGE: 라운드테이블 ─────────────────────────────────────── -->
-  <div id="page-roundtable" class="page hidden p-6 space-y-3">
-    <h3 class="text-sm font-bold text-white flex items-center gap-2">
-      <span class="material-symbols-outlined text-primary text-base">groups</span>주간 라운드테이블
-    </h3>
-    <div id="roundtable-list" class="space-y-2"></div>
-  </div>
-
-  <!-- ── PAGE: 데이터현황 ──────────────────────────────────────── -->
-  <div id="page-data" class="page hidden p-6 space-y-5">
-    <h3 class="text-sm font-bold text-white flex items-center gap-2">
-      <span class="material-symbols-outlined text-primary text-base">database</span>데이터 수집 현황
-    </h3>
-    <div id="data-status-grid" class="grid grid-cols-4 gap-4"></div>
-    <div class="bg-card rounded-2xl border border-gray-800/60 p-5">
-      <h4 class="text-xs font-bold text-gray-400 uppercase mb-4">API 사용 현황</h4>
-      <div id="api-usage-table"></div>
+  <!-- ══════════════════════════════════════════════════════════
+       PAGE: 데이터현황
+  ══════════════════════════════════════════════════════════ -->
+  <div id="page-data" class="page">
+    <div class="p-8 space-y-6">
+      <h3 class="text-lg font-bold text-white flex items-center gap-2">
+        <span class="material-symbols-outlined text-primary">database</span>데이터 현황
+      </h3>
+      <div id="data-status-grid" class="grid grid-cols-2 lg:grid-cols-4 gap-4"></div>
+      <div class="bg-card border border-[#2a2f3e] rounded-2xl p-6">
+        <h4 class="text-sm font-bold text-gray-400 uppercase mb-4">API 사용 현황</h4>
+        <div id="api-usage-detail" class="text-sm text-gray-500">로딩 중…</div>
+      </div>
     </div>
   </div>
 
 </main>
 
-<!-- ── MODAL ─────────────────────────────────────────────────────── -->
-<div id="modal-backdrop" class="modal-backdrop hidden" onclick="if(event.target===this)closeModal()">
-  <div class="modal-box">
-    <button class="absolute top-4 right-4 text-gray-500 hover:text-white transition-colors"
-            onclick="closeModal()">
+<!-- ══════════════════════════════════════════════════════════════
+     MODAL (리포트 뷰어)
+══════════════════════════════════════════════════════════════ -->
+<div id="modal-backdrop" class="hidden fixed inset-0 z-60 bg-black/80 flex items-center justify-center p-4" onclick="if(event.target===this)closeModal()">
+  <div class="bg-card border border-[#2a2f3e] rounded-2xl max-w-3xl w-full max-h-[85vh] overflow-y-auto p-7 relative">
+    <button class="absolute top-4 right-4 text-gray-500 hover:text-white transition-colors" onclick="closeModal()">
       <span class="material-symbols-outlined">close</span>
     </button>
     <div id="modal-body" class="prose-report"></div>
   </div>
 </div>
 
-<!-- ── SCRIPTS ───────────────────────────────────────────────────── -->
+<!-- Scripts -->
 <script src="/js/charts.js"></script>
 <script src="/js/logs.js"></script>
 <script src="/js/app.js"></script>
