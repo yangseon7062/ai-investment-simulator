@@ -631,7 +631,5 @@ async function loadDataStatus() {
 }
 
 // ── Init (스크립트가 body 하단에 있으므로 DOM 이미 준비됨) ──────
-// 초기 메인 페이지 로드
-showPage('main');
-
 let currentPage = 'main';
+showPage('main');
