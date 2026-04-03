@@ -102,7 +102,7 @@ function renderLogCard(log, index) {
             ${logTypeChip(log.log_type)}
             ${tickers}
             <span class="ml-auto flex items-center gap-2 shrink-0">
-                ${thesisBadge(log.was_correct)}
+                ${thesisBadge(log.thesis_valid)}
                 <span class="text-xs text-gray-600">${formatTs(log.created_at)}</span>
                 <span class="material-symbols-outlined text-gray-600 text-sm expand-icon">expand_more</span>
             </span>

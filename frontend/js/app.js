@@ -14,8 +14,8 @@ const PAGE_TITLES = {
   stocks:'종목뷰', debate:'토론', roundtable:'라운드테이블', data:'데이터현황',
 };
 
-let logsOffset = 0;
-const LOGS_LIMIT = 30;
+let logsLimit = 30;
+const LOGS_STEP = 30;
 
 // ── Modal ──────────────────────────────────────────────────────
 function showModal(html) {
@@ -55,7 +55,7 @@ function showPage(pageId) {
 function loadPageData(pageId) {
   if (pageId === 'main')        loadMain();
   if (pageId === 'agents')      loadAgentsPage();
-  if (pageId === 'logs')        { logsOffset = 0; loadLogs(); }
+  if (pageId === 'logs')        { logsLimit = LOGS_STEP; loadLogs(); }
   if (pageId === 'debate')      loadDebate();
   if (pageId === 'roundtable')  loadRoundtable();
   if (pageId === 'data')        loadDataStatus();
@@ -154,7 +154,7 @@ function renderAgentCards(agents) {
       <p class="text-[10px] text-gray-500 uppercase tracking-tighter">${agent.style}</p>
       <div class="mt-2 pt-2 border-t border-[#2a2f3e] flex justify-between text-[10px] text-gray-600">
         <span>${(a.open_positions || 0)}종목</span>
-        <span>${a.cash_balance_krw != null ? (a.cash_balance_krw/1e8).toFixed(1)+'억' : '—'}</span>
+        <span>${a.total_value_krw != null ? (a.total_value_krw/1e8).toFixed(1)+'억' : '—'}</span>
       </div>
     </div>`;
   }).join('');
@@ -188,17 +188,20 @@ function renderConflicts(conflicts) {
     el.innerHTML = '<p class="text-xs text-gray-600 py-2">충돌 없음</p>';
     return;
   }
-  // Stitch 원본 충돌 카드 스타일
-  el.innerHTML = conflicts.slice(0, 4).map(c => `
-    <div class="p-4 rounded-xl border cursor-pointer hover:opacity-90 transition-opacity ${c.is_conflict ? 'bg-danger/5 border-danger/20' : 'bg-success/5 border-success/20'}"
+  // conflicts = debate 타입 로그 (실제 필드: id, agent_id, tickers, thesis, report_md, created_at)
+  el.innerHTML = conflicts.slice(0, 4).map(c => {
+    const summary = c.thesis || (c.report_md || '').replace(/[#*`\n]/g,'').slice(0, 80);
+    return `
+    <div class="p-4 rounded-xl border bg-danger/5 border-danger/20 cursor-pointer hover:opacity-90 transition-opacity"
          onclick="openReportModal(${c.id})">
       <div class="flex items-center justify-between mb-2">
-        <span class="text-[10px] font-bold uppercase ${c.is_conflict ? 'text-danger' : 'text-success'}">${c.is_conflict ? '의견 대립' : '강한 합의'}</span>
+        <span class="text-[10px] font-bold uppercase text-danger">의견 대립</span>
         <span class="text-[10px] font-mono text-primary/70">${c.tickers || ''}</span>
       </div>
-      <p class="text-sm font-bold text-white mb-1 truncate">${(c.summary || '').slice(0, 40) || '—'}</p>
-      <p class="text-xs text-gray-400 leading-relaxed truncate">${(c.summary || '').slice(40, 100)}</p>
-    </div>`).join('');
+      <p class="text-sm font-bold text-white mb-1 truncate">${summary.slice(0,40) || '—'}</p>
+      <p class="text-xs text-gray-400 truncate">${summary.slice(40,100)}</p>
+    </div>`;
+  }).join('');
 }
 
 function renderUnifiedPortfolio(portfolio) {
@@ -352,40 +355,33 @@ async function openAgentDetail(agentId) {
 
 // ── Page: 로그 ─────────────────────────────────────────────────
 async function loadLogs() {
-  logsOffset = 0;
+  logsLimit = LOGS_STEP;
+  await _fetchAndRenderLogs();
+}
+
+async function loadMoreLogs() {
+  logsLimit += LOGS_STEP;
+  await _fetchAndRenderLogs();
+}
+
+async function _fetchAndRenderLogs() {
   const list = document.getElementById('logs-list');
   list.innerHTML = '<div class="flex items-center gap-2 py-6 text-gray-600 text-xs"><span class="material-symbols-outlined animate-spin text-base">progress_activity</span>로딩 중…</div>';
 
   const agent = document.getElementById('log-agent-filter')?.value || '';
   const type  = document.getElementById('log-type-filter')?.value  || '';
 
-  let url = `/api/logs/?limit=${LOGS_LIMIT}&offset=0`;
+  let url = `/api/logs/?limit=${logsLimit}`;
   if (agent) url += `&agent_id=${agent}`;
   if (type)  url += `&log_type=${type}`;
 
   const logs = await apiFetch(url).catch(() => []);
   renderLogList(list, logs);
-  logsOffset = logs.length;
 
   const btn = document.getElementById('load-more-logs');
-  if (btn) btn.classList.toggle('hidden', logs.length < LOGS_LIMIT);
+  if (btn) btn.classList.toggle('hidden', logs.length < logsLimit);
 }
 
-async function loadMoreLogs() {
-  const agent = document.getElementById('log-agent-filter')?.value || '';
-  const type  = document.getElementById('log-type-filter')?.value  || '';
-  let url = `/api/logs/?limit=${LOGS_LIMIT}&offset=${logsOffset}`;
-  if (agent) url += `&agent_id=${agent}`;
-  if (type)  url += `&log_type=${type}`;
-
-  const logs = await apiFetch(url).catch(() => []);
-  const list = document.getElementById('logs-list');
-  if (list) list.insertAdjacentHTML('beforeend', logs.map((l, i) => renderLogCard(l, logsOffset + i)).join(''));
-  logsOffset += logs.length;
-
-  const btn = document.getElementById('load-more-logs');
-  if (btn) btn.classList.toggle('hidden', logs.length < LOGS_LIMIT);
-}
 
 // ── Page: 토론 ─────────────────────────────────────────────────
 async function loadDebate() {
@@ -466,26 +462,34 @@ function goToStock(ticker) {
 // ── Page: 데이터현황 ───────────────────────────────────────────
 async function loadDataStatus() {
   const summary = await apiFetch('/api/dashboard/summary').catch(() => ({}));
-  const cost = summary.api_cost || {};
+  const cost  = summary.api_cost || {};
+  const snap  = summary.snapshot || {};
+  const macro = (() => { try { return JSON.parse(snap.macro_data || '{}'); } catch { return {}; } })();
+  const fred  = macro.fred || {};
 
   const grid = document.getElementById('data-status-grid');
   grid.innerHTML = [
-    { label: '에이전트', value: '7명 활성', icon: 'smart_toy', color: '#7c6aff' },
-    { label: '이번달 API 비용', value: '$' + (cost.total_cost || 0).toFixed(4), icon: 'payments', color: '#22c55e' },
-    { label: 'API 호출 횟수', value: (cost.call_count || 0) + '회', icon: 'api', color: '#3b82f6' },
-    { label: '백테스팅', value: '운영 6개월 후', icon: 'history', color: '#f59e0b' },
+    { label: 'VIX (공포지수)',    value: macro.vix         != null ? macro.vix.toFixed(1)          : '—', icon: 'ssid_chart',        color: '#ef4444' },
+    { label: 'Fear & Greed',      value: macro.fear_greed  != null ? macro.fear_greed.toFixed(0)    : '—', icon: 'sentiment_stressed', color: '#f59e0b' },
+    { label: '미국 10년 국채',    value: fred['10Y_YIELD'] != null ? fred['10Y_YIELD'].toFixed(2)+'%': '—', icon: 'percent',            color: '#3b82f6' },
+    { label: '10Y-2Y 스프레드',   value: fred.T10Y2Y       != null ? fred.T10Y2Y.toFixed(2)+'%'     : '—', icon: 'trending_flat',      color: '#8b5cf6' },
+    { label: 'KR 시장 국면',      value: snap.regime_kr    || '—',                                         icon: 'flag',               color: '#10b981' },
+    { label: 'US 시장 국면',      value: snap.regime_us    || '—',                                         icon: 'public',             color: '#06b6d4' },
+    { label: '이번달 API 비용',   value: '$' + (cost.total_cost  || 0).toFixed(4),                         icon: 'payments',           color: '#22c55e' },
+    { label: 'API 호출 횟수',     value: (cost.call_count  || 0) + '회',                                   icon: 'api',                color: '#7c6aff' },
   ].map(s => `
-    <div class="bg-card border border-gray-800/60 rounded-2xl p-5">
-      <span class="material-symbols-outlined text-2xl mb-2 block" style="color:${s.color}">${s.icon}</span>
-      <div class="text-base font-bold text-white">${s.value}</div>
+    <div class="bg-card border border-[#2a2f3e] rounded-2xl p-5">
+      <span class="material-symbols-outlined text-xl mb-2 block" style="color:${s.color}">${s.icon}</span>
+      <div class="text-lg font-bold text-white">${s.value}</div>
       <div class="text-xs text-gray-600 mt-1">${s.label}</div>
     </div>`).join('');
 
-  const table = document.getElementById('api-usage-table');
-  table.innerHTML = `
-    <div class="text-xs text-gray-600 text-center py-6">
-      API 상세 사용 내역은 누적 후 표시됩니다
-    </div>`;
+  const detail = document.getElementById('api-usage-detail');
+  const rows = [
+    snap.narrative_kr ? `<p class="mb-3"><span class="text-xs font-bold text-success bg-success/10 px-2 py-0.5 rounded mr-2">KR</span><span class="text-sm text-gray-400">${snap.narrative_kr}</span></p>` : '',
+    snap.narrative_us ? `<p><span class="text-xs font-bold text-primary bg-primary/10 px-2 py-0.5 rounded mr-2">US</span><span class="text-sm text-gray-400">${snap.narrative_us}</span></p>` : '',
+  ].filter(Boolean).join('');
+  detail.innerHTML = rows || '<p class="text-gray-600 text-sm text-center py-4">데이터 없음 (매일 07:00 수집)</p>';
 }
 
 // ── Init (스크립트가 body 하단에 있으므로 DOM 이미 준비됨) ──────
