@@ -36,13 +36,17 @@ function showPage(pageId) {
   if (page) page.classList.add('active');
 
   document.querySelectorAll('.nav-link').forEach(n => {
-    n.classList.remove('nav-active');
-    n.classList.add('text-gray-400');
+    n.style.color = '#9ca3af';
+    n.style.background = '';
+    n.style.borderRight = '';
+    n.style.fontWeight = '';
   });
   const active = document.querySelector(`.nav-link[data-page="${pageId}"]`);
   if (active) {
-    active.classList.add('nav-active');
-    active.classList.remove('text-gray-400');
+    active.style.color = '#7c6aff';
+    active.style.background = 'rgba(124,106,255,.12)';
+    active.style.borderRight = '2px solid #7c6aff';
+    active.style.fontWeight = '600';
   }
 
   const title = document.getElementById('page-title');
