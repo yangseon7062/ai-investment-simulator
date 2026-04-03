@@ -36,7 +36,7 @@ async def run_position_monitor(market: str):
     else:
         prices = await get_us_prices(tickers)
 
-    today = date.today().isoformat()
+    today = date.today()
     async with get_db() as conn:
         snap_row = await conn.fetchrow(
             "SELECT * FROM market_snapshots WHERE snapshot_date = $1", today

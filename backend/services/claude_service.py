@@ -10,37 +10,51 @@ Claude API 서비스
 
 import json
 from datetime import datetime
-from anthropic import AsyncAnthropic
+from groq import AsyncGroq
 
-from backend.config import ANTHROPIC_API_KEY, CLAUDE_MODEL, CLAUDE_MAX_TOKENS
+from backend.config import GROQ_API_KEY, CLAUDE_MAX_TOKENS
 from backend.database import execute as db_execute
 
-client = AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+# ── 임시: Groq으로 운영 (Claude API 크레딧 충전 후 아래 주석 교체) ──
+# 교체 방법:
+#   1. from anthropic import AsyncAnthropic
+#   2. from backend.config import ANTHROPIC_API_KEY, CLAUDE_MODEL
+#   3. client = AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+#   4. _call_claude 내부를 원래 Claude 호출 코드로 복원
+GROQ_MODEL = "llama-3.3-70b-versatile"
+_client: AsyncGroq | None = None
 
-# Claude 입력 토큰당 비용 (claude-sonnet-4-6 기준, $3/MTok)
-COST_PER_INPUT_TOKEN = 3.0 / 1_000_000
-COST_PER_OUTPUT_TOKEN = 15.0 / 1_000_000
+
+def _get_client() -> AsyncGroq:
+    global _client
+    if _client is None:
+        _client = AsyncGroq(api_key=GROQ_API_KEY)
+    return _client
 
 
 async def _call_claude(prompt: str, system: str, purpose: str) -> str:
-    """Claude 호출 + 비용 트래킹"""
-    response = await client.messages.create(
-        model=CLAUDE_MODEL,
-        max_tokens=CLAUDE_MAX_TOKENS,
-        system=system,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    text = response.content[0].text
-    input_tokens = response.usage.input_tokens
-    output_tokens = response.usage.output_tokens
-    cost = input_tokens * COST_PER_INPUT_TOKEN + output_tokens * COST_PER_OUTPUT_TOKEN
-
-    await db_execute(
-        """INSERT INTO api_usage (model, input_tokens, output_tokens, estimated_cost, purpose)
-           VALUES ($1, $2, $3, $4, $5)""",
-        (CLAUDE_MODEL, input_tokens, output_tokens, cost, purpose),
-    )
-    return text
+    """Groq 호출 (Claude API 크레딧 충전 후 Claude로 교체 예정)"""
+    try:
+        client = _get_client()
+        response = await client.chat.completions.create(
+            model=GROQ_MODEL,
+            max_tokens=min(CLAUDE_MAX_TOKENS, 8000),
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt},
+            ],
+        )
+        text = response.choices[0].message.content or ""
+        # 비용 트래킹 (Groq는 무료이므로 0으로 기록)
+        await db_execute(
+            """INSERT INTO api_usage (model, input_tokens, output_tokens, estimated_cost, purpose)
+               VALUES ($1, $2, $3, $4, $5)""",
+            (GROQ_MODEL, 0, 0, 0.0, purpose),
+        )
+        return text
+    except Exception as e:
+        print(f"[Groq/_call_claude] 오류: {e}")
+        return ""
 
 
 # ── Plan A: 에이전트별 고정 매크로 프레임워크 ──────────────────────────

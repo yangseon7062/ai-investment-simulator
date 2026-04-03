@@ -202,7 +202,7 @@ async def run_scoring_engine():
     4. 복합 스코어 계산
     5. stock_scores 저장
     """
-    today = date.today().isoformat()
+    today = date.today()
     print(f"[{datetime.now().strftime('%H:%M:%S')}] 스코어링 엔진 시작 — {today}")
 
     kr_tickers, us_tickers = await load_screening_pool()
@@ -222,7 +222,7 @@ async def run_scoring_engine():
 
     # ── 스코어 계산 + 저장 ──
     records = []
-    today_date = date.today().isoformat()
+    today_date = date.today()
 
     # KR
     for ticker in kr_tickers:
@@ -302,7 +302,7 @@ AGENT_WEIGHTS = {
 
 async def get_top_stocks(agent_id: str, market: str, top_n: int = 30) -> list[dict]:
     """에이전트별 가중치 적용 → 상위 종목 반환"""
-    today = date.today().isoformat()
+    today = date.today()
     weights = AGENT_WEIGHTS.get(agent_id, {"technical": 0.4, "fundamental": 0.4, "sentiment": 0.2})
 
     async with get_db() as conn:

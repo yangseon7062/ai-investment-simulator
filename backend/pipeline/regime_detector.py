@@ -14,7 +14,7 @@ from backend.database import execute as db_execute, fetchone, get_db
 
 
 async def run_regime_detection() -> dict:
-    today = date.today().isoformat()
+    today = date.today()
 
     existing = await fetchone(
         "SELECT * FROM market_snapshots WHERE snapshot_date = $1", (today,)

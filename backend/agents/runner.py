@@ -243,7 +243,7 @@ async def _save_pass_log(agent_id: str, reason: str, market_context: dict, repor
 
 async def detect_conflicts_and_debate(decisions: list[dict]):
     """같은 종목 반대 포지션 감지 → 토론 리포트"""
-    today = date.today().isoformat()
+    today = date.today()
     async with get_db() as conn:
         today_logs = [dict(r) for r in await conn.fetch(
             """SELECT agent_id, tickers, report_md, log_type FROM investment_logs
@@ -279,7 +279,7 @@ async def detect_conflicts_and_debate(decisions: list[dict]):
 
 async def save_portfolio_snapshots(exchange_rate: float):
     """모든 에이전트 포트폴리오 일별 스냅샷 저장"""
-    today = date.today().isoformat()
+    today = date.today()
 
     for agent in get_all_agents():
         agent_id = agent.agent_id
@@ -332,7 +332,7 @@ async def run_all_agents():
     """08:30 KST 전체 에이전트 실행"""
     print(f"[{datetime.now().strftime('%H:%M:%S')}] 에이전트 실행 시작")
 
-    today = date.today().isoformat()
+    today = date.today()
     async with get_db() as conn:
         snapshot = dict(await conn.fetchrow(
             "SELECT * FROM market_snapshots WHERE snapshot_date = $1", today
