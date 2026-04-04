@@ -12,8 +12,7 @@ from datetime import datetime, date
 from typing import Optional
 
 from backend.database import get_db
-from backend.services.data_fetcher import get_us_prices, get_kr_prices, get_foreign_buying
-from backend.services.sentiment_fetcher import get_bulk_sentiment
+from backend.services.data_fetcher import get_us_prices, get_kr_prices, get_foreign_buying, get_us_financials
 
 
 # ── 기술적 지표 계산 ───────────────────────────────────────────────
@@ -163,9 +162,16 @@ def calc_composite_score(
     fundamental: float,
     sentiment: float,
     weights: dict = None,
+    has_sentiment: bool = True,
 ) -> float:
     if weights is None:
         weights = {"technical": 0.4, "fundamental": 0.4, "sentiment": 0.2}
+    if not has_sentiment:
+        # 감성 데이터 없으면 기술+재무 비중으로 재분배
+        total = weights["technical"] + weights["fundamental"]
+        tw = weights["technical"] / total
+        fw = weights["fundamental"] / total
+        return round(technical * tw + fundamental * fw, 2)
     return round(
         technical * weights["technical"]
         + fundamental * weights["fundamental"]
@@ -191,6 +197,73 @@ async def load_screening_pool() -> tuple[list[str], list[str]]:
     return kr_tickers, us_tickers
 
 
+# ── 재무 캐시 업데이트 ─────────────────────────────────────────────
+
+async def _update_financials_cache(us_tickers: list, kr_tickers: list):
+    """캐시 없는 종목 재무 데이터 수집 (US: yfinance, KR: yfinance)"""
+    from datetime import datetime
+    quarter = f"{datetime.now().year}Q{(datetime.now().month - 1) // 3 + 1}"
+
+    # 이미 캐시된 종목 제외
+    async with get_db() as conn:
+        cached = await conn.fetch(
+            "SELECT ticker FROM financials_cache WHERE fiscal_quarter = $1", quarter
+        )
+    cached_set = {r["ticker"] for r in cached}
+
+    to_fetch_us = [t for t in us_tickers if t not in cached_set]
+    to_fetch_kr = [t for t in kr_tickers if t not in cached_set]
+
+    # US 재무 수집 (병렬, 최대 20개)
+    async def _save_us(ticker):
+        try:
+            data = await get_us_financials(ticker)
+            if not data:
+                return
+            async with get_db() as conn:
+                await conn.execute(
+                    """INSERT INTO financials_cache
+                       (ticker, market, fiscal_quarter, revenue, operating_income, net_income,
+                        total_assets, invested_capital, roic, pbr, per, revenue_growth)
+                       VALUES ($1,'US',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+                       ON CONFLICT (ticker, fiscal_quarter) DO UPDATE SET
+                         roic=EXCLUDED.roic, pbr=EXCLUDED.pbr, per=EXCLUDED.per,
+                         revenue_growth=EXCLUDED.revenue_growth, updated_at=NOW()""",
+                    ticker, quarter, data.get("revenue"), data.get("operating_income"),
+                    data.get("net_income"), data.get("total_assets"), data.get("invested_capital"),
+                    data.get("roic"), data.get("pbr"), data.get("per"), data.get("revenue_growth"),
+                )
+        except Exception:
+            pass
+
+    # KR 재무 수집 (yfinance, 종목코드.KS)
+    async def _save_kr(ticker):
+        try:
+            data = await get_us_financials(ticker + ".KS")  # yfinance KR 형식
+            if not data:
+                return
+            async with get_db() as conn:
+                await conn.execute(
+                    """INSERT INTO financials_cache
+                       (ticker, market, fiscal_quarter, revenue, operating_income, net_income,
+                        total_assets, invested_capital, roic, pbr, per, revenue_growth)
+                       VALUES ($1,'KR',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+                       ON CONFLICT (ticker, fiscal_quarter) DO UPDATE SET
+                         roic=EXCLUDED.roic, pbr=EXCLUDED.pbr, per=EXCLUDED.per,
+                         revenue_growth=EXCLUDED.revenue_growth, updated_at=NOW()""",
+                    ticker, quarter, data.get("revenue"), data.get("operating_income"),
+                    data.get("net_income"), data.get("total_assets"), data.get("invested_capital"),
+                    data.get("roic"), data.get("pbr"), data.get("per"), data.get("revenue_growth"),
+                )
+        except Exception:
+            pass
+
+    tasks = [_save_us(t) for t in to_fetch_us[:20]] + [_save_kr(t) for t in to_fetch_kr[:10]]
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+        print(f"  재무 캐시: US {len(to_fetch_us[:20])}개 + KR {len(to_fetch_kr[:10])}개 업데이트")
+
+
 # ── 메인 스코어링 실행 ──────────────────────────────────────────────
 
 async def run_scoring_engine():
@@ -203,10 +276,14 @@ async def run_scoring_engine():
     5. stock_scores 저장
     """
     today = date.today()
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] 스코어링 엔진 시작 — {today}")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] 스코어링 엔진 시작 - {today}")
 
     kr_tickers, us_tickers = await load_screening_pool()
     print(f"  KR {len(kr_tickers)}종목 / US {len(us_tickers)}종목")
+
+    # ── 재무 캐시 업데이트 (캐시 없는 종목만, 최대 30개/일) ──
+    print("  재무 캐시 업데이트 중...")
+    await _update_financials_cache(us_tickers[:30], kr_tickers[:20])
 
     # ── 시세 수집 ──
     print("  시세 수집 중...")
@@ -214,11 +291,6 @@ async def run_scoring_engine():
         get_kr_prices(kr_tickers),
         get_us_prices(us_tickers),
     )
-
-    # ── 감성 수집 (KR 활성 종목만) ──
-    active_kr = [t for t in kr_tickers if t in kr_prices][:200]
-    print(f"  감성 수집 중 ({len(active_kr)}종목)...")
-    sentiment_map = await get_bulk_sentiment(active_kr)
 
     # ── 스코어 계산 + 저장 ──
     records = []
@@ -231,18 +303,16 @@ async def run_scoring_engine():
             continue
 
         prices = price_data.get("prices_60d", [])
-        volumes = [price_data.get("volume", 0)] * len(prices)   # 단순화
+        volumes = [price_data.get("volume", 0)] * len(prices)
 
         tech = calc_technical_score(prices, volumes)
         fund = await calc_fundamental_score(ticker, "KR")
-        raw_sent = sentiment_map.get(ticker, {}).get("sentiment_score", 0.0)
-        sent = calc_sentiment_score_from_raw(raw_sent)
-        composite = calc_composite_score(tech, fund, sent)
+        composite = calc_composite_score(tech, fund, 50.0, has_sentiment=False)
 
         records.append((
             today_date, ticker, "KR",
-            tech, fund, sent, composite,
-            None,   # market_cap (추후 업데이트)
+            tech, fund, 50.0, composite,
+            price_data.get("price"),
         ))
 
     # US
@@ -258,13 +328,12 @@ async def run_scoring_engine():
 
         tech = calc_technical_score(prices, volumes)
         fund = await calc_fundamental_score(ticker, "US")
-        sent = 50.0   # US 감성은 현재 중립값 (추후 확장)
-        composite = calc_composite_score(tech, fund, sent)
+        composite = calc_composite_score(tech, fund, 50.0, has_sentiment=False)
 
         records.append((
             today_date, ticker, "US",
-            tech, fund, sent, composite,
-            None,
+            tech, fund, 50.0, composite,
+            price_data.get("price"),
         ))
 
     # DB 저장
@@ -290,25 +359,25 @@ async def run_scoring_engine():
 # ── 에이전트별 가중 스코어 조회 ────────────────────────────────────
 
 AGENT_WEIGHTS = {
-    "macro":        {"technical": 0.2, "fundamental": 0.3, "sentiment": 0.5},
-    "strategist":   {"technical": 0.2, "fundamental": 0.7, "sentiment": 0.1},
-    "analyst":      {"technical": 0.1, "fundamental": 0.8, "sentiment": 0.1},
-    "surfer":       {"technical": 0.8, "fundamental": 0.1, "sentiment": 0.1},
-    "explorer":     {"technical": 0.3, "fundamental": 0.6, "sentiment": 0.1},
-    "contrarian":   {"technical": 0.1, "fundamental": 0.2, "sentiment": 0.7},
-    "bear":         {"technical": 0.5, "fundamental": 0.1, "sentiment": 0.4},
+    "macro":        {"technical": 0.4, "fundamental": 0.6, "sentiment": 0.0},
+    "strategist":   {"technical": 0.2, "fundamental": 0.8, "sentiment": 0.0},
+    "analyst":      {"technical": 0.1, "fundamental": 0.9, "sentiment": 0.0},
+    "surfer":       {"technical": 0.9, "fundamental": 0.1, "sentiment": 0.0},
+    "explorer":     {"technical": 0.3, "fundamental": 0.7, "sentiment": 0.0},
+    "contrarian":   {"technical": 0.3, "fundamental": 0.7, "sentiment": 0.0},
+    "bear":         {"technical": 0.6, "fundamental": 0.4, "sentiment": 0.0},
 }
 
 
 async def get_top_stocks(agent_id: str, market: str, top_n: int = 30) -> list[dict]:
-    """에이전트별 가중치 적용 → 상위 종목 반환"""
+    """에이전트별 가중치 적용 → 상위 종목 반환 (현재가 포함)"""
     today = date.today()
     weights = AGENT_WEIGHTS.get(agent_id, {"technical": 0.4, "fundamental": 0.4, "sentiment": 0.2})
 
     async with get_db() as conn:
         rows = await conn.fetch(
             """SELECT s.ticker, s.technical_score, s.fundamental_score,
-                      s.sentiment_score, c.name, c.sector
+                      s.sentiment_score, s.market_cap, c.name, c.sector
                FROM stock_scores s
                LEFT JOIN company_info c ON s.ticker = c.ticker AND s.market = c.market
                WHERE s.score_date = $1 AND s.market = $2""",
@@ -319,17 +388,30 @@ async def get_top_stocks(agent_id: str, market: str, top_n: int = 30) -> list[di
     for row in rows:
         tech = row["technical_score"] or 50.0
         fund = row["fundamental_score"] or 50.0
-        sent = row["sentiment_score"] or 50.0
-        weighted = calc_composite_score(tech, fund, sent, weights)
+        weighted = calc_composite_score(tech, fund, 50.0, weights, has_sentiment=False)
         results.append({
             "ticker": row["ticker"],
             "name": row["name"],
             "sector": row["sector"],
+            "market": market,
             "technical_score": tech,
             "fundamental_score": fund,
-            "sentiment_score": sent,
             "agent_score": weighted,
+            "price": row["market_cap"],
         })
 
     results.sort(key=lambda x: x["agent_score"], reverse=True)
-    return results[:top_n]
+    top = results[:top_n]
+
+    # 실시간 현재가 보완 (market_cap에 가격이 없는 경우)
+    tickers_no_price = [r["ticker"] for r in top if not r["price"]]
+    if tickers_no_price:
+        if market == "KR":
+            prices = await get_kr_prices(tickers_no_price)
+        else:
+            prices = await get_us_prices(tickers_no_price)
+        for r in top:
+            if not r["price"] and r["ticker"] in prices:
+                r["price"] = prices[r["ticker"]].get("price", 0)
+
+    return top

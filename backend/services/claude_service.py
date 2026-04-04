@@ -247,7 +247,8 @@ async def generate_agent_decision(
     candidate_stocks: list[dict],
     current_positions: list[dict],
     recent_logs: list[dict],
-    cash_krw: float,
+    recent_losses: list[dict] | None = None,
+    extra_context: dict | None = None,
 ) -> dict:
     """
     에이전트 투자 판단 생성
@@ -255,7 +256,8 @@ async def generate_agent_decision(
         "decision": "buy|pass",
         "ticker": str | None,
         "market": "KR|US",
-        "quantity": float,
+        "price": float,
+        "entry_advice": str,  (분할매수 or 일괄매수 권장)
         "thesis": str,
         "report_md": str  (근거 3단 구조)
     }
@@ -263,29 +265,133 @@ async def generate_agent_decision(
     # Plan A: macro/strategist/bear — 고정 프레임워크 시스템 프롬프트에 삽입
     macro_lens = _get_agent_macro_lens(agent_config.agent_id)
 
+    # 에이전트별 핵심 데이터 레이블
+    _KEY_DATA_LABELS = {
+        "technical_score": "기술적 스코어(RSI·이동평균·거래량 종합)",
+        "fundamental_score": "재무 스코어(PBR·PER·ROIC 종합)",
+        "pbr": "PBR(주가순자산비율) — 저평가 여부",
+        "per": "PER(주가수익비율) — 수익성 대비 주가",
+        "roic": "ROIC(투하자본수익률) — 자본 효율성",
+        "revenue_growth": "매출 성장률 — 성장 모멘텀",
+        "foreign_net_3d": "외국인 3일 순매수 수급",
+        "institution_net_3d": "기관 3일 순매수 수급",
+        "pct_from_high": "52주 고점 대비 하락률",
+        "recent_news": "최근 종목 뉴스",
+        "sector_etf": "섹터 ETF 수익률 흐름",
+        "fred": "FRED 금리 데이터(금리 방향)",
+        "narrative": "오늘의 시장 내러티브",
+        "fear_greed": "공포탐욕지수(심리 극단 여부)",
+        "vix": "VIX(시장 변동성지수)",
+        "regime": "시장 국면(상승/하락/횡보/변동성)",
+        "exchange_rate": "원달러 환율(달러 자산 매수 비용)",
+    }
+    key_data_lines = "\n".join(
+        f"  - {_KEY_DATA_LABELS.get(k, k)}"
+        for k in (agent_config.key_data or [])
+    )
+    key_data_section = f"\n핵심 판단 데이터 (당신의 전략상 가장 중요한 항목):\n{key_data_lines}" if key_data_lines else ""
+
     system = f"""당신은 '{agent_config.name_kr}'라는 AI 투자 에이전트입니다.
 페르소나: {agent_config.persona}
 전략: {agent_config.strategy}
 투자 시간축: {agent_config.time_horizon}
 리포트 스타일: {agent_config.report_style}
-{macro_lens}
+{macro_lens}{key_data_section}
+
 모든 판단은 한국어로 작성하세요.
 전문 용어 사용 시 반드시 괄호로 설명을 추가하세요. (예: PBR(주가순자산비율))
-숫자 근거는 반드시 의미 해석을 포함하세요."""
+숫자 근거는 반드시 의미 해석을 포함하세요.
+
+⚠️ 데이터 누락 처리 원칙:
+- "⚠️없음"으로 표시된 항목은 데이터가 수집되지 않은 것이다. 해당 항목을 투자 근거로 사용하지 말 것.
+- data_gaps 필드가 있는 종목은 누락 데이터를 리포트에 명시할 것.
+- 당신의 required_data(핵심 판단 데이터)가 "⚠️없음"인 종목은 pass 처리할 것."""
 
     # Plan B: 모든 에이전트 — 임계값 초과 시 동적 경고 주입
     warning_context = _build_market_warning_context(market_context)
 
+    # 내러티브 섹션 (Task 5: 거시 뉴스 시그널 강조)
+    narrative_section = ""
+    narrative_kr = market_context.get("narrative_kr", "")
+    narrative_us = market_context.get("narrative_us", "")
+    if narrative_kr or narrative_us:
+        narrative_section = "\n## 오늘의 시장 내러티브 (거시 뉴스 요약)\n"
+        if narrative_kr:
+            narrative_section += f"**[국내]** {narrative_kr}\n"
+        if narrative_us:
+            narrative_section += f"**[미국]** {narrative_us}\n"
+
+    # 최근 손절 내역 섹션 (Task 3)
+    loss_section = ""
+    if recent_losses:
+        loss_lines = "\n".join(
+            f"- {l.get('ticker')} {l.get('pnl_pct', 0):+.1f}% ({l.get('created_at', '')[:10]})"
+            for l in recent_losses
+        )
+        loss_section = f"\n## 최근 30일 손절 내역 (경계 참고)\n{loss_lines}\n(위 종목 재진입 시 신중하게 판단할 것)\n"
+
+    # extra_context 섹션 구성
+    extra = extra_context or {}
+    extra_section = ""
+
+    exchange_rate = extra.get("exchange_rate")
+    if exchange_rate:
+        extra_section += f"\n**현재 환율**: {exchange_rate:,.0f} 원/달러 (미국 주식 매수 시 참고)\n"
+
+    mdd_info = extra.get("mdd")
+    if mdd_info and (mdd_info.get("mdd", 0) < -3 or mdd_info.get("current_drawdown", 0) < -2):
+        extra_section += (
+            f"**포트폴리오 MDD**: 최대 낙폭 {mdd_info['mdd']:+.1f}% | "
+            f"현재 고점 대비 {mdd_info['current_drawdown']:+.1f}% | 고점 수익률 {mdd_info['peak']:+.1f}%\n"
+        )
+        if mdd_info.get("current_drawdown", 0) < -5:
+            extra_section += "⚠️ 현재 고점 대비 -5% 이상 낙폭 — 신규 매수 전 리스크 재검토 권고\n"
+
+    sector_conc = extra.get("sector_concentration")
+    if sector_conc:
+        conc_lines = " | ".join(f"{k} {v}%" for k, v in sector_conc.items())
+        extra_section += f"**현재 섹터 집중도**: {conc_lines}\n"
+        if any(v >= 60 for v in sector_conc.values()):
+            extra_section += "⚠️ 특정 섹터 60%+ 집중 — 동일 섹터 추가 매수 자제 권고\n"
+
+    sector_etf = extra.get("sector_etf")
+    if sector_etf:
+        kr_etf = [e for e in sector_etf if e.get("market") == "KR"]
+        us_etf = [e for e in sector_etf if e.get("market") == "US"]
+        def _etf_line(e):
+            r1 = e.get('return_1d')
+            r5 = e.get('return_5d')
+            r1s = f"{r1:+.1f}%" if r1 is not None else "⚠️없음"
+            r5s = f"{r5:+.1f}%" if r5 is not None else "⚠️없음"
+            return f"  {e.get('etf_name', e.get('etf_ticker'))}: 1일 {r1s} / 5일 {r5s}"
+        if kr_etf:
+            extra_section += "\n**국내 섹터 ETF 흐름**\n" + "\n".join(_etf_line(e) for e in kr_etf) + "\n"
+        if us_etf:
+            extra_section += "\n**미국 섹터 ETF 흐름**\n" + "\n".join(_etf_line(e) for e in us_etf) + "\n"
+
+    # 보유 포지션에 PnL 요약 추가
+    pos_summary = []
+    for p in current_positions:
+        pnl = p.get("pnl_pct")
+        pnl_str = f"{pnl:+.1f}%" if pnl is not None else "⚠️없음"
+        thesis = p.get("thesis", "테제 없음")
+        pos_summary.append({
+            "ticker": p.get("ticker"), "name": p.get("name"),
+            "status": p.get("status"), "pnl_pct": pnl_str,
+            "thesis": thesis,
+        })
+
     prompt = f"""
-## 현재 시장 상황
-{json.dumps(market_context, ensure_ascii=False, indent=2)}
-{warning_context}
-## 보유 포지션 ({len(current_positions)}개)
-{json.dumps(current_positions, ensure_ascii=False, indent=2)}
+## 현재 시장 상황 (거시 수치)
+국면: KR={market_context.get('regime_kr')} / US={market_context.get('regime_us')}
+VIX: {market_context.get('vix')} | 공포탐욕지수: {market_context.get('fear_greed')}
+FRED 금리: {json.dumps(market_context.get('fred', {}), ensure_ascii=False)}
+gold 변화: {market_context.get('gold_change_pct', 0):+.1f}% | S&P500 변화: {market_context.get('spx_change_pct', 0):+.1f}%
+{extra_section}{narrative_section}{warning_context}{loss_section}
+## 보유 포지션 ({len(current_positions)}개) — 현재 수익률 포함
+{json.dumps(pos_summary, ensure_ascii=False, indent=2)}
 
-## 가용 현금: {cash_krw:,.0f}원
-
-## 후보 종목 (스코어 상위)
+## 후보 종목 (스코어 상위 + 거래량 급등 포함)
 {json.dumps(candidate_stocks[:20], ensure_ascii=False, indent=2)}
 
 ## 최근 30일 내 판단 기록
@@ -295,14 +401,16 @@ async def generate_agent_decision(
 
 위 정보를 바탕으로 오늘의 투자 판단을 하세요.
 
+매수 판단 시 종목 변동성·확신도를 고려해 분할매수(여러 번 나눠서 매수) 또는 일괄매수를 entry_advice에 명시하세요.
+
 **반드시 다음 JSON 형식으로 응답:**
 {{
   "decision": "buy 또는 pass",
   "ticker": "종목코드 또는 null",
   "market": "KR 또는 US",
   "name": "종목명",
-  "quantity": 매수수량(소수점 가능),
-  "price": 매수가격,
+  "price": 매수가격(전일 종가 기준),
+  "entry_advice": "분할매수 권장 - 변동성 높아 3회 분할 / 일괄매수 권장 - 확신도 높음 (buy일 때만, pass면 null)",
   "thesis": "투자 테제 한 문장",
   "report_md": "## 오늘의 판단\\n\\n### 핵심 판단\\n...\\n\\n### 데이터 근거\\n...\\n\\n### AI 해석\\n...",
   "pass_reason": "pass 선택 시 이유 (buy면 null)"
@@ -321,8 +429,8 @@ async def generate_agent_decision(
             "ticker": None,
             "market": "KR",
             "name": None,
-            "quantity": 0,
             "price": 0,
+            "entry_advice": None,
             "thesis": None,
             "report_md": f"## 판단 오류\n\n분석 중 오류가 발생했습니다.\n\n원본:\n{result}",
             "pass_reason": "분석 오류",
@@ -337,6 +445,7 @@ async def monitor_position(
     current_price: float,
     market_context: dict,
     original_thesis: str,
+    holding_days: int = 0,
 ) -> dict:
     """
     보유 포지션 테제 유효성 체크
@@ -354,12 +463,27 @@ async def monitor_position(
 
     system = f"""당신은 '{agent_config.name_kr}' AI 에이전트입니다.
 페르소나: {agent_config.persona}
-경계 트리거: {agent_config.watch_trigger}{earnings_test_note}"""
+경계 트리거: {agent_config.watch_trigger}
+리포트 스타일: {agent_config.report_style}{earnings_test_note}"""
 
     # Plan B: 동적 경고 주입
     warning_context = _build_market_warning_context(market_context)
 
     pnl_pct = (current_price - position["price"]) / position["price"] * 100
+
+    # 급락 감지 정보 (price_spikes가 market_context에 있을 경우)
+    spike_note = ""
+    spike_pct = market_context.get("price_spikes", {}).get(position.get("ticker", ""), None)
+    if spike_pct is not None:
+        spike_note = f"\n⚠️ **오늘 급락 감지: {spike_pct:+.1f}%** — 즉각적 테제 재검토 필요"
+
+    # 최신 뉴스 섹션
+    news_list = position.get("recent_news", [])
+    news_section = ""
+    if news_list:
+        news_section = "\n## 최신 종목 뉴스\n" + "\n".join(f"- {n}" for n in news_list) + "\n"
+    else:
+        news_section = "\n## 최신 종목 뉴스\n- ⚠️없음 (뉴스 수집 실패 또는 없음)\n"
 
     prompt = f"""
 ## 보유 포지션
@@ -367,11 +491,13 @@ async def monitor_position(
 매수가: {position['price']:,.0f}
 현재가: {current_price:,.0f}
 수익률: {pnl_pct:+.2f}%
+보유 기간: {holding_days}일
 매수 테제: {original_thesis}
-현재 상태: {position.get('status', 'hold')}
-
+현재 상태: {position.get('status', 'hold')}{spike_note}
+{news_section}
 ## 현재 시장 상황
-{json.dumps(market_context, ensure_ascii=False, indent=2)}
+국면: KR={market_context.get('regime_kr')} / US={market_context.get('regime_us')}
+VIX: {market_context.get('vix')} | 공포탐욕지수: {market_context.get('fear_greed')}
 {warning_context}
 ---
 

@@ -207,6 +207,7 @@ function renderAgentCards(agents) {
         <span class="text-gray-600">${(a.open_positions || 0)}종목</span>
         <span class="${dailyColor}">일간 ${dailySign}${daily.toFixed(2)}%</span>
       </div>
+      ${(a.mdd||0) < -3 ? `<div class="mt-1 text-[10px] text-danger/80">MDD ${(a.mdd||0).toFixed(1)}%</div>` : ''}
     </div>`;
   }).join('');
 }
@@ -335,9 +336,8 @@ async function openAgentDetail(agentId) {
 
   const snapshots = perf.snapshots || [];
   const totalReturn = snapshots.length
-    ? ((snapshots[snapshots.length-1].total_value_krw - 1e8) / 1e8 * 100).toFixed(2)
+    ? parseFloat(snapshots[snapshots.length-1].total_value_krw || 0).toFixed(2)
     : '0.00';
-  // Try to get cash info from /api/agents/ (may already be in memory from loadMain)
   const agentFullData = await apiFetch('/api/agents/').then(list => list.find(a => a.agent_id === agentId)).catch(() => null);
 
   detail.innerHTML = `
@@ -368,15 +368,28 @@ async function openAgentDetail(agentId) {
         <div class="h-32"><canvas id="agent-chart-${agentId}"></canvas></div>
       </div>` : ''}
 
-      <!-- Cash info -->
+      <!-- Return info + MDD -->
       ${agentFullData ? `
-      <div class="bg-card border border-gray-800/60 rounded-2xl p-4 flex gap-6 text-sm">
-        <div><div class="text-xs text-gray-600 mb-0.5">현금 잔고</div><div class="font-bold text-white">${(agentFullData.cash_krw/1e8).toFixed(2)}억</div></div>
-        <div><div class="text-xs text-gray-600 mb-0.5">총 자산</div><div class="font-bold text-white">${(agentFullData.total_value_krw/1e8).toFixed(2)}억</div></div>
+      <div class="bg-card border border-gray-800/60 rounded-2xl p-4 flex flex-wrap gap-5 text-sm">
+        <div><div class="text-xs text-gray-600 mb-0.5">보유 종목</div><div class="font-bold text-white">${agentFullData.open_positions || 0}개</div></div>
+        <div><div class="text-xs text-gray-600 mb-0.5">누적 수익률</div>
+          <div class="font-bold ${(agentFullData.total_return||0)>0?'text-success':(agentFullData.total_return||0)<0?'text-danger':'text-gray-400'}">
+            ${(agentFullData.total_return||0)>=0?'+':''}${(agentFullData.total_return||0).toFixed(2)}%
+          </div>
+        </div>
         <div><div class="text-xs text-gray-600 mb-0.5">일간 수익률</div>
           <div class="font-bold ${(agentFullData.daily_return||0)>0?'text-success':(agentFullData.daily_return||0)<0?'text-danger':'text-gray-400'}">
             ${(agentFullData.daily_return||0)>=0?'+':''}${(agentFullData.daily_return||0).toFixed(2)}%
           </div>
+        </div>
+        <div><div class="text-xs text-gray-600 mb-0.5">고점 수익률</div>
+          <div class="font-bold text-gray-300">+${(perf.peak_return||0).toFixed(2)}%</div>
+        </div>
+        <div><div class="text-xs text-gray-600 mb-0.5">MDD (최대 낙폭)</div>
+          <div class="font-bold ${(perf.mdd||0)<-5?'text-danger':'text-gray-400'}">${(perf.mdd||0).toFixed(2)}%</div>
+        </div>
+        <div><div class="text-xs text-gray-600 mb-0.5">현재 낙폭</div>
+          <div class="font-bold ${(perf.current_drawdown||0)<-3?'text-warning':'text-gray-400'}">${(perf.current_drawdown||0).toFixed(2)}%</div>
         </div>
       </div>` : ''}
 
@@ -391,25 +404,31 @@ async function openAgentDetail(agentId) {
               <tr>
                 <th class="px-5 py-3">종목</th>
                 <th class="px-5 py-3">시장</th>
-                <th class="px-5 py-3 text-right">수량</th>
                 <th class="px-5 py-3 text-right">매수가</th>
+                <th class="px-5 py-3 text-right">수익률</th>
                 <th class="px-5 py-3">상태</th>
                 <th class="px-5 py-3">섹터</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-gray-800/40">
-              ${positions.map(p => `
+              ${positions.map(p => {
+                const pnl = p.pnl_pct != null ? parseFloat(p.pnl_pct) : null;
+                const pnlHtml = pnl != null
+                  ? `<span class="${pnl > 0 ? 'text-success' : pnl < 0 ? 'text-danger' : 'text-gray-400'} font-bold">${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%</span>`
+                  : '<span class="text-gray-600">-</span>';
+                return `
               <tr class="hover:bg-white/[.025]">
                 <td class="px-5 py-3">
                   <span class="font-semibold text-white">${p.name || p.ticker}</span>
                   <span class="text-gray-600 ml-1">${p.ticker}</span>
                 </td>
                 <td class="px-5 py-3 text-gray-500">${p.market}</td>
-                <td class="px-5 py-3 text-right text-gray-400">${p.quantity != null ? p.quantity.toLocaleString() : '-'}</td>
                 <td class="px-5 py-3 text-right text-gray-400">${(p.price || 0).toLocaleString()}</td>
+                <td class="px-5 py-3 text-right">${pnlHtml}</td>
                 <td class="px-5 py-3 status-${p.status}">${{buy:'매수',hold:'보유',watch:'경계',closed:'종료'}[p.status] || p.status}</td>
                 <td class="px-5 py-3 text-gray-600">${p.sector || '-'}</td>
-              </tr>`).join('') || '<tr><td colspan="6" class="px-5 py-8 text-center text-gray-600">포지션 없음</td></tr>'}
+              </tr>`;
+              }).join('') || '<tr><td colspan="6" class="px-5 py-8 text-center text-gray-600">포지션 없음</td></tr>'}
             </tbody>
           </table>
         </div>
@@ -583,7 +602,7 @@ async function loadDataStatus() {
   const grid = document.getElementById('data-status-grid');
   grid.innerHTML = [
     { label: 'VIX (공포지수)',    value: macro.vix         != null ? macro.vix.toFixed(1)          : '—', icon: 'ssid_chart',        color: '#ef4444' },
-    { label: 'Fear & Greed',      value: macro.fear_greed  != null ? macro.fear_greed.toFixed(0)    : '—', icon: 'sentiment_stressed', color: '#f59e0b' },
+    { label: 'Fear & Greed',      value: macro.fear_greed  != null ? (typeof macro.fear_greed === 'object' ? (macro.fear_greed.value ?? '—') : Number(macro.fear_greed).toFixed(0)) : '—', icon: 'sentiment_stressed', color: '#f59e0b' },
     { label: '미국 10년 국채',    value: fred['10Y_YIELD'] != null ? fred['10Y_YIELD'].toFixed(2)+'%': '—', icon: 'percent',            color: '#3b82f6' },
     { label: '10Y-2Y 스프레드',   value: fred.T10Y2Y       != null ? fred.T10Y2Y.toFixed(2)+'%'     : '—', icon: 'trending_flat',      color: '#8b5cf6' },
     { label: 'KR 시장 국면',      value: snap.regime_kr    || '—',                                         icon: 'flag',               color: '#10b981' },

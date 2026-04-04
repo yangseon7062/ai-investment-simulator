@@ -28,12 +28,6 @@ async def get_logs(
     return [dict(r) for r in rows]
 
 
-@router.get("/{log_id}")
-async def get_log(log_id: int):
-    row = await fetchone("SELECT * FROM investment_logs WHERE id = $1", (log_id,))
-    return dict(row) if row else {}
-
-
 @router.get("/postmortems/list")
 async def get_postmortems(agent_id: Optional[str] = None, limit: int = 30):
     params = []
@@ -54,4 +48,10 @@ async def get_latest_roundtable():
     row = await fetchone(
         "SELECT * FROM investment_logs WHERE log_type = 'roundtable' ORDER BY created_at DESC LIMIT 1"
     )
+    return dict(row) if row else {}
+
+
+@router.get("/{log_id}")
+async def get_log(log_id: int):
+    row = await fetchone("SELECT * FROM investment_logs WHERE id = $1", (log_id,))
     return dict(row) if row else {}

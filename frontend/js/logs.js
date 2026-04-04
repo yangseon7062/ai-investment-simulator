@@ -94,6 +94,7 @@ function regimeBadge(market, regime) {
 }
 
 // ── Render a single collapsible log card ──────────────────────
+let _logCardCounter = 0;
 function renderLogCard(log, index) {
     const summary = (log.thesis || log.report_md || '')
         .replace(/[#*\-`]/g, '').trim().slice(0, 140);
@@ -107,7 +108,7 @@ function renderLogCard(log, index) {
         regimeBadge('US', log.market_regime_us),
     ].filter(Boolean).join('');
 
-    const bodyId = `log-body-${log.id || index}`;
+    const bodyId = `log-body-${++_logCardCounter}`;
 
     return `
     <div class="bg-card border border-gray-800 rounded-xl mb-2 overflow-hidden transition-all">

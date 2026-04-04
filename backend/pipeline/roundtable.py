@@ -2,14 +2,14 @@
 주간 라운드테이블 (금요일 17:00 KST)
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from backend.database import get_db, execute as db_execute
 from backend.services.claude_service import generate_roundtable
 
 
 async def run_roundtable():
-    today = datetime.now().date()
-    week_start = (today - timedelta(days=today.weekday())).isoformat()
+    today = date.today()
+    week_start = today - timedelta(days=today.weekday())
 
     async with get_db() as conn:
         weekly_stats = [dict(r) for r in await conn.fetch(

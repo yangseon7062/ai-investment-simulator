@@ -96,15 +96,33 @@ async def get_ticker_sentiment(ticker: str) -> dict:
 
 
 async def get_bulk_sentiment(tickers: list[str]) -> dict:
-    """여러 종목 감성 병렬 수집 (활성 종목만, ~100~200개)"""
-    tasks = [get_ticker_sentiment(ticker) for ticker in tickers]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    """여러 종목 감성 병렬 수집
+    - 전체: 종토방 카운트 기반 스코어 (Groq 없음)
+    - 상위 10개만: Groq NLP 보완 (토큰 절감)
+    """
+    # 1단계: 전체 종목 카운트 기반 스코어 (Groq 없음)
+    async def _count_only(ticker):
+        posts = await fetch_stockboard_posts(ticker)
+        score = calc_sentiment_score(posts)
+        return ticker, score, len(posts)
+
+    count_results = await asyncio.gather(*[_count_only(t) for t in tickers], return_exceptions=True)
 
     sentiment_map = {}
-    for ticker, result in zip(tickers, results):
-        if isinstance(result, dict):
-            sentiment_map[ticker] = result
-        else:
-            sentiment_map[ticker] = {"ticker": ticker, "sentiment_score": 0.0, "post_count": 0}
+    scored = []
+    for r in count_results:
+        if isinstance(r, tuple):
+            ticker, score, cnt = r
+            sentiment_map[ticker] = {"ticker": ticker, "sentiment_score": score, "post_count": cnt}
+            scored.append((ticker, cnt))
+
+    # 2단계: 게시글 많은 상위 10개만 Groq NLP 보완
+    top10 = [t for t, cnt in sorted(scored, key=lambda x: x[1], reverse=True) if cnt > 0][:10]
+    if top10:
+        groq_tasks = [get_ticker_sentiment(t) for t in top10]
+        groq_results = await asyncio.gather(*groq_tasks, return_exceptions=True)
+        for ticker, result in zip(top10, groq_results):
+            if isinstance(result, dict):
+                sentiment_map[ticker] = result
 
     return sentiment_map

@@ -82,7 +82,7 @@ function renderPerformanceChart(canvasId, datasets) {
         d.snapshots.forEach(s => { map[s.snapshot_date] = s.total_value_krw; });
         const data = labels.map(lbl => {
             const v = map[lbl];
-            return v != null ? +((v - 100_000_000) / 100_000_000 * 100).toFixed(2) : null;
+            return v != null ? +parseFloat(v).toFixed(2) : null;
         });
         const color = AGENT_COLORS[d.agentId] || '#888';
         return {
@@ -153,7 +153,7 @@ function renderAgentChart(canvasId, agentId, snapshots) {
     if (!canvas) return;
 
     const labels = snapshots.map(s => s.snapshot_date);
-    const data   = snapshots.map(s => +((s.total_value_krw - 100_000_000) / 100_000_000 * 100).toFixed(2));
+    const data   = snapshots.map(s => +parseFloat(s.total_value_krw || 0).toFixed(2));
     const color  = AGENT_COLORS[agentId] || '#7c6aff';
 
     _charts[canvasId] = new Chart(canvas.getContext('2d'), {

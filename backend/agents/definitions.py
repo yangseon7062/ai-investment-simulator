@@ -39,6 +39,12 @@ class AgentConfig:
     monitor_daily: bool = True       # False면 주 1회 모니터링 (전략가)
     inverse_etf_only: bool = False   # 베어 전용
 
+    # 데이터 요구사항
+    # required_data: 후보 종목이 이 필드를 갖지 않으면 후보에서 제외
+    # key_data: 프롬프트에서 강조할 데이터 섹션 (에이전트 전략에 맞는 것만)
+    required_data: list = field(default_factory=list)
+    key_data: list = field(default_factory=list)
+
 
 AGENTS: dict[str, AgentConfig] = {
 
@@ -59,6 +65,8 @@ AGENTS: dict[str, AgentConfig] = {
         report_style="거시적 시각으로 트렌드 중심 서술. 경제 흐름과 종목의 연결고리를 명확히 설명.",
         report_depth="medium",
         score_weights={"technical": 0.2, "fundamental": 0.3, "sentiment": 0.5},
+        required_data=["price"],
+        key_data=["fred", "sector_etf", "narrative", "regime", "vix", "exchange_rate"],
     ),
 
     "strategist": AgentConfig(
@@ -78,7 +86,9 @@ AGENTS: dict[str, AgentConfig] = {
         report_style="논리적·체계적으로 근거를 세 단계로 전개. 핵심 판단 → 정량 데이터 → 비즈니스 해석.",
         report_depth="full",
         score_weights={"technical": 0.2, "fundamental": 0.7, "sentiment": 0.1},
-        monitor_daily=False,   # 주 1회 (금요일 라운드테이블)
+        monitor_daily=False,
+        required_data=["price", "roic"],  # ROIC 없는 종목은 해자 검증 불가 → 제외
+        key_data=["roic", "pbr", "per", "revenue_growth", "sector_etf"],
     ),
 
     "analyst": AgentConfig(
@@ -98,6 +108,8 @@ AGENTS: dict[str, AgentConfig] = {
         report_style="리스크를 먼저 언급한 뒤 매수 근거 제시. 보수적 어조 유지. 풀 3단 구조.",
         report_depth="full",
         score_weights={"technical": 0.1, "fundamental": 0.8, "sentiment": 0.1},
+        required_data=["price", "pbr"],  # PBR 없으면 저평가 판단 자체가 불가
+        key_data=["pbr", "per", "roic", "revenue_growth"],
     ),
 
     "surfer": AgentConfig(
@@ -117,6 +129,8 @@ AGENTS: dict[str, AgentConfig] = {
         report_style="짧고 빠르게. 핵심 신호 1~2줄. 3단 구조를 압축해서 표현.",
         report_depth="compact",
         score_weights={"technical": 0.8, "fundamental": 0.1, "sentiment": 0.1},
+        required_data=["price", "technical_score"],  # 기술 스코어 없으면 모멘텀 판단 불가
+        key_data=["technical_score", "foreign_net_3d", "institution_net_3d", "pct_from_high", "recent_news"],
     ),
 
     "explorer": AgentConfig(
@@ -136,6 +150,8 @@ AGENTS: dict[str, AgentConfig] = {
         report_style="비전과 성장 스토리 중심으로 서술. 숫자는 성장 가능성 입증 도구로 활용.",
         report_depth="medium",
         score_weights={"technical": 0.3, "fundamental": 0.6, "sentiment": 0.1},
+        required_data=["price", "revenue_growth"],  # 성장률 없으면 20%+ 검증 불가
+        key_data=["revenue_growth", "roic", "recent_news", "pct_from_high"],
     ),
 
     "contrarian": AgentConfig(
@@ -155,7 +171,9 @@ AGENTS: dict[str, AgentConfig] = {
         report_style="역설적 표현으로 군중 심리를 비판. 왜 시장이 틀렸는지를 설명.",
         report_depth="medium",
         score_weights={"technical": 0.1, "fundamental": 0.2, "sentiment": 0.7},
-        condition_based=True,   # 극단 심리 조건 충족 시만 매수
+        condition_based=True,
+        required_data=["price"],  # 심리 지표는 market_context에서 오므로 종목은 가격만 필수
+        key_data=["fear_greed", "vix", "regime", "foreign_net_3d", "pct_from_high"],
     ),
 
     "bear": AgentConfig(
@@ -175,8 +193,10 @@ AGENTS: dict[str, AgentConfig] = {
         report_style="비관적 어조로 위험 신호 강조. 왜 하락이 올지를 근거 중심으로 설명.",
         report_depth="medium",
         score_weights={"technical": 0.5, "fundamental": 0.1, "sentiment": 0.4},
-        condition_based=True,   # 하락 국면 조건 충족 시만 매수
+        condition_based=True,
         inverse_etf_only=True,
+        required_data=["price"],
+        key_data=["vix", "fred", "regime", "sector_etf", "narrative"],
     ),
 }
 

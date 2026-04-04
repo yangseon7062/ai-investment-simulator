@@ -158,7 +158,7 @@ async def get_kr_prices(tickers: list[str]) -> dict:
 
 # ── 외국인 수급 ────────────────────────────────────────────────────
 async def get_foreign_buying(tickers: list[str]) -> dict:
-    """pykrx 외국인 순매수"""
+    """pykrx 외국인+기관 순매수 (최근 3일)"""
     loop = asyncio.get_event_loop()
 
     def _fetch():
@@ -166,19 +166,59 @@ async def get_foreign_buying(tickers: list[str]) -> dict:
             from pykrx import stock as krx
             result = {}
             today = datetime.now().strftime("%Y%m%d")
-            start = (datetime.now() - timedelta(days=5)).strftime("%Y%m%d")
+            start = (datetime.now() - timedelta(days=7)).strftime("%Y%m%d")
             for ticker in tickers:
                 try:
                     df = krx.get_market_trading_value_by_investor(start, today, ticker)
                     if df.empty:
                         continue
-                    foreign_net = float(df["외국인합계"].iloc[-1])
-                    result[ticker] = {"foreign_net_buy": foreign_net}
+                    # 최근 3일 합산
+                    recent = df.tail(3)
+                    foreign_net = float(recent["외국인합계"].sum()) if "외국인합계" in recent else 0.0
+                    inst_net = float(recent["기관합계"].sum()) if "기관합계" in recent else 0.0
+                    result[ticker] = {
+                        "foreign_net_3d": round(foreign_net / 1e8, 2),  # 억원
+                        "institution_net_3d": round(inst_net / 1e8, 2),  # 억원
+                    }
                 except Exception:
                     pass
             return result
         except ImportError:
             return {}
+
+    return await loop.run_in_executor(None, _fetch)
+
+
+async def get_kr_supply_demand(tickers: list[str]) -> dict:
+    """KR 종목 외국인+기관 수급 (get_foreign_buying alias)"""
+    return await get_foreign_buying(tickers)
+
+
+async def get_52week_high_low(tickers: list[str], market: str) -> dict:
+    """52주 고저가 및 현재가 대비 위치"""
+    loop = asyncio.get_event_loop()
+
+    def _fetch():
+        result = {}
+        for ticker in tickers:
+            try:
+                t = ticker if market == "US" else ticker + ".KS"
+                info = yf.Ticker(t).fast_info
+                high52 = getattr(info, "fifty_two_week_high", None)
+                low52 = getattr(info, "fifty_two_week_low", None)
+                current = getattr(info, "last_price", None)
+                if high52 and low52 and current:
+                    pct_from_high = round((current - high52) / high52 * 100, 1)
+                    pct_from_low = round((current - low52) / low52 * 100, 1)
+                    result[ticker] = {
+                        "high_52w": high52,
+                        "low_52w": low52,
+                        "pct_from_high": pct_from_high,  # 음수 = 고점 대비 하락
+                        "pct_from_low": pct_from_low,    # 양수 = 저점 대비 상승
+                    }
+            except Exception:
+                pass
+        return result
 
     return await loop.run_in_executor(None, _fetch)
 
@@ -350,3 +390,166 @@ async def get_kr_market_special() -> dict:
         "is_futures_expiry": is_futures_expiry,
         "date": today.strftime("%Y-%m-%d"),
     }
+
+
+async def update_stock_universe():
+    """KOSPI200 + KOSDAQ150 + S&P500 + NASDAQ100 전종목 company_info 업데이트"""
+    import requests
+    from backend.database import get_db
+    from pykrx import stock as krx
+
+    loop = asyncio.get_event_loop()
+
+    # 최근 거래일 계산 (오늘이 주말이면 금요일)
+    def _last_trading_date():
+        from datetime import date, timedelta
+        d = date.today()
+        while d.weekday() >= 5:  # 토=5, 일=6
+            d -= timedelta(days=1)
+        return d.strftime("%Y%m%d")
+
+    # KR 종목 (KOSPI200 + KOSDAQ150 주요 종목 — 분기별 수동 업데이트)
+    KR_UNIVERSE = {
+        # 반도체
+        "005930": "삼성전자", "000660": "SK하이닉스", "009150": "삼성전기",
+        "042700": "한미반도체", "091990": "셀트리온헬스케어", "005290": "동진쎄미켐",
+        # 2차전지
+        "006400": "삼성SDI", "051910": "LG화학", "247540": "에코프로비엠",
+        "373220": "LG에너지솔루션", "096770": "SK이노베이션", "011790": "SKC",
+        "086520": "에코프로", "316140": "우리금융지주",
+        # 자동차
+        "005380": "현대차", "000270": "기아", "012330": "현대모비스",
+        "064960": "S&T모티브", "161390": "한국타이어앤테크놀로지",
+        # IT/인터넷
+        "035420": "NAVER", "035720": "카카오", "259960": "크래프톤",
+        "036570": "엔씨소프트", "263750": "펄어비스",
+        # 바이오
+        "207940": "삼성바이오로직스", "068270": "셀트리온", "128940": "한미약품",
+        "000100": "유한양행", "185750": "종근당", "001700": "신일제약",
+        "326030": "SK바이오팜", "302440": "SK바이오사이언스",
+        # 금융
+        "105560": "KB금융", "055550": "신한지주", "086790": "하나금융지주",
+        "010950": "S-Oil", "316140": "우리금융지주", "024110": "기업은행",
+        "138930": "BNK금융지주", "175330": "JB금융지주",
+        # 지주/대기업
+        "003550": "LG", "034730": "SK", "028260": "삼성물산",
+        "000810": "삼성화재", "032830": "삼성생명",
+        # 통신
+        "017670": "SK텔레콤", "030200": "KT", "032640": "LG유플러스",
+        # 전자/부품
+        "066570": "LG전자", "006800": "미래에셋증권", "010140": "삼성중공업",
+        "009540": "HD한국조선해양", "329180": "HD현대중공업",
+        # 방산
+        "012450": "한화에어로스페이스", "047810": "한국항공우주", "064350": "현대로템",
+        # 화학/소재
+        "011170": "롯데케미칼", "010060": "OCI", "298000": "효성첨단소재",
+        # 유통/소비
+        "004170": "신세계", "023530": "롯데쇼핑", "139480": "이마트",
+        # 건설
+        "000720": "현대건설", "006360": "GS건설", "047040": "대우건설",
+        # KOSDAQ 대표
+        "357780": "솔브레인", "403870": "HPSP", "196170": "알테오젠",
+        "214150": "클래시스", "145020": "휴젤", "066970": "엘앤에프",
+        "293490": "카카오게임즈", "112040": "위메이드", "251270": "넷마블",
+        "950130": "엑세스바이오", "078600": "대주전자재료",
+    }
+    def _fetch_kr():
+        return KR_UNIVERSE
+
+    # US 종목 (S&P500 + NASDAQ100) — Wikipedia with User-Agent
+    def _fetch_us():
+        tickers = {}
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; research-bot/1.0)"}
+        try:
+            import io
+            r = requests.get(
+                "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
+                headers=headers, timeout=15
+            )
+            tables = pd.read_html(io.StringIO(r.text))
+            sp500 = tables[0]
+            for _, row in sp500.iterrows():
+                tickers[str(row["Symbol"]).replace(".", "-")] = str(row["Security"])
+        except Exception:
+            pass
+        try:
+            import io
+            r = requests.get(
+                "https://en.wikipedia.org/wiki/Nasdaq-100",
+                headers=headers, timeout=15
+            )
+            tables = pd.read_html(io.StringIO(r.text))
+            # 티커 컬럼 있는 테이블 찾기
+            for t in tables:
+                cols = [str(c).lower() for c in t.columns]
+                if "ticker" in cols or "symbol" in cols:
+                    col = "Ticker" if "Ticker" in t.columns else "Symbol"
+                    name_col = "Company" if "Company" in t.columns else t.columns[1]
+                    for _, row in t.iterrows():
+                        sym = str(row[col]).replace(".", "-")
+                        if len(sym) <= 5 and sym.isalpha():
+                            tickers[sym] = str(row[name_col])
+                    break
+        except Exception:
+            pass
+        return tickers
+
+    kr_tickers = await loop.run_in_executor(None, _fetch_kr)
+    us_tickers = await loop.run_in_executor(None, _fetch_us)
+
+    async with get_db() as conn:
+        for ticker, name in kr_tickers.items():
+            await conn.execute(
+                """INSERT INTO company_info (ticker, market, name)
+                   VALUES ($1, 'KR', $2)
+                   ON CONFLICT (ticker, market) DO UPDATE SET name=$2, updated_at=NOW()""",
+                ticker, name,
+            )
+        for ticker, name in us_tickers.items():
+            await conn.execute(
+                """INSERT INTO company_info (ticker, market, name)
+                   VALUES ($1, 'US', $2)
+                   ON CONFLICT (ticker, market) DO UPDATE SET name=$2, updated_at=NOW()""",
+                ticker, name,
+            )
+
+    print(f"[종목 업데이트] KR {len(kr_tickers)}개 + US {len(us_tickers)}개")
+
+
+async def get_yfinance_news(tickers: list[str]) -> dict:
+    """yfinance 뉴스 수집 — 미국 종목별 최신 뉴스 3개
+    반환: {ticker: [{"title": str, "summary": str, "published": str}]}
+    """
+    loop = asyncio.get_event_loop()
+
+    def _fetch(ticker):
+        try:
+            t = yf.Ticker(ticker)
+            news = t.news or []
+            result = []
+            for item in news[:3]:
+                content = item.get("content", {})
+                title = content.get("title", "") or item.get("title", "")
+                summary = content.get("summary", "") or ""
+                pub = content.get("pubDate", "") or item.get("providerPublishTime", "")
+                if title:
+                    result.append({
+                        "title": title,
+                        "summary": summary[:300],
+                        "published": str(pub),
+                    })
+            return ticker, result
+        except Exception:
+            return ticker, []
+
+    tasks = [loop.run_in_executor(None, _fetch, t) for t in tickers]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    news_map = {}
+    for r in results:
+        if isinstance(r, tuple):
+            ticker, news = r
+            if news:
+                news_map[ticker] = news
+
+    return news_map

@@ -12,9 +12,8 @@ async def get_summary():
     )
     agents_perf = await fetchall(
         """SELECT p.agent_id,
-                  p.total_value_krw,
+                  p.total_value_krw AS total_return,
                   p.daily_return,
-                  (p.total_value_krw - 100000000) / 100000000.0 * 100 AS total_return,
                   (SELECT COUNT(*) FROM simulated_trades t
                    WHERE t.agent_id = p.agent_id AND t.status != 'closed') AS open_positions
            FROM portfolio_snapshots p

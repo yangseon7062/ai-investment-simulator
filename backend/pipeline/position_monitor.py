@@ -125,10 +125,6 @@ async def _execute_sell(position: dict, current_price: float, agent, reason: str
         from backend.services.data_fetcher import get_exchange_rate
         exchange_rate = await get_exchange_rate()
 
-    proceeds_krw = current_price * position["quantity"]
-    if market == "US":
-        proceeds_krw *= exchange_rate
-
     sell_report = f"## 매도 판단\n\n**사유**: {reason}\n\n**매도가**: {current_price:,.0f}\n"
 
     await db_execute(
@@ -143,11 +139,6 @@ async def _execute_sell(position: dict, current_price: float, agent, reason: str
     await db_execute(
         "UPDATE simulated_trades SET status = 'closed' WHERE id = $1",
         (position["id"],),
-    )
-
-    await db_execute(
-        "UPDATE agent_portfolios SET cash_krw = cash_krw + $1, updated_at = NOW() WHERE agent_id = $2",
-        (proceeds_krw, agent_id),
     )
 
     buy_price = position["price"]
