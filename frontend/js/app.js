@@ -2,10 +2,8 @@
 const AGENTS = [
   { id:'macro',      name:'매크로',    icon:'public',        color:'#7c6aff', style:'거시테마형' },
   { id:'strategist', name:'전략가',    icon:'analytics',     color:'#3b82f6', style:'퀄리티형' },
-  { id:'analyst',    name:'심사역',    icon:'manage_search', color:'#10b981', style:'가치형' },
   { id:'surfer',     name:'서퍼',      icon:'trending_up',   color:'#f59e0b', style:'모멘텀형' },
-  { id:'explorer',   name:'미래탐색자',icon:'rocket_launch', color:'#ec4899', style:'성장형' },
-  { id:'contrarian', name:'컨트라리안',icon:'swap_horiz',    color:'#8b5cf6', style:'역발상형' },
+  { id:'explorer',   name:'미래탐색자',icon:'rocket_launch', color:'#ec4899', style:'성장테마형' },
   { id:'bear',       name:'베어',      icon:'trending_down', color:'#ef4444', style:'하락베팅형' },
 ];
 
@@ -187,7 +185,14 @@ function renderAgentCards(agents) {
     const a = map[agent.id] || {};
     const ret = a.total_return || 0;
     const sign = ret >= 0 ? '+' : '';
-    const retColor = ret > 0 ? 'text-success' : ret < 0 ? 'text-danger' : 'text-warning';
+
+    // 베어: 손실이 정상일 수 있음 — 색상 반전 + 설명 레이블
+    const isBear = agent.id === 'bear';
+    const retColor = isBear
+      ? (ret >= 0 ? 'text-success' : 'text-gray-400')  // 베어 손실은 회색(정상)
+      : (ret > 0 ? 'text-success' : ret < 0 ? 'text-danger' : 'text-warning');
+    const bearNote = isBear && ret < 0 ? '<span class="text-[9px] text-gray-500 ml-1">(상승장 정상)</span>' : '';
+
     const daily = a.daily_return || 0;
     const dailySign = daily >= 0 ? '+' : '';
     const dailyColor = daily > 0 ? 'text-success' : daily < 0 ? 'text-danger' : 'text-gray-600';
@@ -199,7 +204,7 @@ function renderAgentCards(agents) {
              style="background:${agent.color}33">
           <span class="material-symbols-outlined text-sm" style="color:${agent.color}">${agent.icon}</span>
         </div>
-        <span class="${retColor} text-xs font-bold">${sign}${ret.toFixed(2)}%</span>
+        <span class="${retColor} text-xs font-bold">${sign}${ret.toFixed(2)}%${bearNote}</span>
       </div>
       <p class="text-xs font-bold text-white">${agent.name}</p>
       <p class="text-[10px] text-gray-500 uppercase tracking-tighter">${agent.style}</p>

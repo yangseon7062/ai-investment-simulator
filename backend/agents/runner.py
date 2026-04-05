@@ -1,10 +1,9 @@
 """
-에이전트 병렬 실행 오케스트레이터 (08:30 KST)
-1. 7개 에이전트 병렬 실행
-2. 전원 완료 대기
-3. 충돌 감지 → 토론 리포트
-4. portfolio_snapshots 기록
-5. 오늘의 한 줄 요약 생성
+에이전트 병렬 실행 오케스트레이터 (16:00 KST)
+1. 5개 에이전트 순차 실행
+2. 충돌 감지 → 토론 리포트
+3. portfolio_snapshots 기록
+4. 오늘의 한 줄 요약 생성
 """
 
 import asyncio
@@ -28,7 +27,10 @@ async def run_single_agent(agent_config, market_context: dict) -> dict:
     print(f"  [{agent_id}] 시작")
 
     # 1. 보유 포지션 테제 체크 → 매도 판단
-    await _monitor_and_sell(agent_id, agent_config, market_context)
+    # monitor_daily=False인 에이전트(전략가)는 금요일에만 모니터링
+    today_weekday = datetime.now().weekday()  # 0=월 ~ 4=금
+    if agent_config.monitor_daily or today_weekday == 4:
+        await _monitor_and_sell(agent_id, agent_config, market_context)
 
     # 2. 매도 후 보유 포지션 재조회 (PnL + thesis 포함)
     today_date = date.today()
@@ -42,7 +44,7 @@ async def run_single_agent(agent_config, market_context: dict) -> dict:
                FROM simulated_trades t
                LEFT JOIN company_info c ON t.ticker = c.ticker AND t.market = c.market
                LEFT JOIN investment_logs l ON t.log_id = l.id
-               LEFT JOIN stock_scores s ON t.ticker = s.ticker AND s.score_date = $2
+               LEFT JOIN stock_scores s ON t.ticker = s.ticker AND s.market = t.market AND s.score_date = $2
                WHERE t.agent_id = $1 AND t.status != 'closed'""",
             agent_id, today_date,
         )
@@ -71,7 +73,7 @@ async def run_single_agent(agent_config, market_context: dict) -> dict:
                                ELSE NULL END
                       ) as avg_pnl_pct
                FROM simulated_trades t
-               LEFT JOIN stock_scores s ON t.ticker = s.ticker
+               LEFT JOIN stock_scores s ON t.ticker = s.ticker AND s.market = t.market
                    AND s.score_date = (SELECT MAX(score_date) FROM stock_scores)
                WHERE t.status != 'closed' AND t.agent_id != $1
                GROUP BY t.ticker""",
@@ -166,8 +168,24 @@ async def run_single_agent(agent_config, market_context: dict) -> dict:
     )
     candidates = kr_candidates + us_candidates
 
+    # 매크로는 섹터 ETF만 (개별 종목 매수 금지)
+    if agent_config.etf_only:
+        etf_tickers = {
+            "TIGER 반도체": "091160", "TIGER 2차전지테마": "305720",
+            "TIGER 헬스케어": "143850", "KODEX 방산": "475050",
+            "TIGER 은행": "091170", "KODEX IT": "266360",
+            "XLK": "XLK", "SMH": "SMH", "XLV": "XLV",
+            "XLF": "XLF", "XLE": "XLE", "ITA": "ITA", "XLC": "XLC",
+        }
+        candidates = [
+            {"ticker": v, "name": k,
+             "market": "US" if len(v) <= 4 and v.isalpha() else "KR",
+             "agent_score": 70, "price": 1.0}
+            for k, v in etf_tickers.items()
+        ]
+
     # 베어는 인버스 ETF만
-    if agent_config.inverse_etf_only:
+    elif agent_config.inverse_etf_only:
         from backend.config import INVERSE_ETFS
         candidates = [
             {"ticker": v, "name": k, "market": "KR" if k.startswith("KR") else "US", "agent_score": 80}
@@ -257,7 +275,7 @@ async def run_single_agent(agent_config, market_context: dict) -> dict:
                 c["roic"] = row["roic"]
                 c["revenue_growth"] = row["revenue_growth"]
 
-    # 후보 종목에 공감대 정보 추가
+    # 후보 종목에 공감대 정보 추가 (보유 현황만 — 판단 의도 제외)
     for c in candidates:
         t = c["ticker"]
         if t in consensus_map:
@@ -270,33 +288,70 @@ async def run_single_agent(agent_config, market_context: dict) -> dict:
         await _save_pass_log(agent_id, "유효한 후보 종목 없음 (데이터 부족)", market_context)
         return {"agent_id": agent_id, "decision": "pass", "reason": "후보 없음"}
 
+    # 에이전트별 컨텍스트 필터링 (독립성 강화)
+    filtered_context = _build_agent_context(agent_config, market_context)
+    filtered_extra = _build_agent_extra(agent_config, {
+        "sector_concentration": sector_concentration,
+        "sector_etf": sector_etf_data,
+        "exchange_rate": current_exchange_rate,
+        "mdd": agent_mdd,
+    })
+    filtered_consensus = consensus_map if agent_config.show_consensus else {}
+
     # Claude 투자 판단
     decision = await generate_agent_decision(
         agent_config,
-        market_context,
+        filtered_context,
         candidates,
         positions,
         recent_logs,
         recent_losses,
-        extra_context={
-            "sector_concentration": sector_concentration,
-            "sector_etf": sector_etf_data,
-            "exchange_rate": current_exchange_rate,
-            "mdd": agent_mdd,
-        },
+        extra_context=filtered_extra,
+        consensus_map=filtered_consensus,
     )
 
     # LLM 응답 검증: 환각 종목 차단 + 가격 보정
     decision = _validate_decision(decision, candidates)
 
     # 결과 처리
-    if decision.get("decision") == "buy" and decision.get("ticker"):
+    decision_type = decision.get("decision")
+    if decision_type == "buy" and decision.get("ticker"):
         await _execute_buy(agent_id, agent_config, decision)
+    elif decision_type == "hold":
+        # hold: 관심 있으나 진입 조건 미충족 — 로그 타입 구분
+        await _save_hold_log(agent_id, decision, market_context)
     else:
-        await _save_pass_log(agent_id, decision.get("pass_reason", "관망"), market_context, decision.get("report_md"))
+        # pass: 전략 기준 대상 없음
+        await _save_pass_log(agent_id, decision.get("pass_reason", "전략 기준 대상 없음"), market_context, decision.get("report_md"))
 
     print(f"  [{agent_id}] 완료 → {decision.get('decision')} {decision.get('ticker', '')}")
     return {"agent_id": agent_id, **decision}
+
+
+def _build_agent_context(agent_config, market_context: dict) -> dict:
+    """에이전트 독립성 강화: 전략과 무관한 거시 컨텍스트 차단"""
+    ctx = dict(market_context)
+    if not agent_config.show_macro_context:
+        # 거시/섹터 정보 제거 (서퍼, 탐색자)
+        ctx.pop("narrative_kr", None)
+        ctx.pop("narrative_us", None)
+        ctx.pop("fred", None)
+        ctx.pop("fear_greed", None)
+        ctx.pop("gold_drop", None)
+        ctx.pop("equity_drop", None)
+        ctx.pop("gold_change_pct", None)
+        ctx.pop("spx_change_pct", None)
+    return ctx
+
+
+def _build_agent_extra(agent_config, extra: dict) -> dict:
+    """에이전트별 extra_context 필터링"""
+    filtered = dict(extra)
+    if not agent_config.show_mdd:
+        filtered.pop("mdd", None)
+    if not agent_config.show_macro_context:
+        filtered.pop("sector_etf", None)
+    return filtered
 
 
 def _preprocess_candidates(candidates: list[dict], agent_config) -> list[dict]:
@@ -324,7 +379,7 @@ def _preprocess_candidates(candidates: list[dict], agent_config) -> list[dict]:
             if req == "price":
                 continue  # 위에서 이미 처리
             val = c.get(req)
-            if val is None or val == 0 or val == "⚠️없음":
+            if val is None or val == "⚠️없음":
                 skip = True
                 break
         if skip:
@@ -385,16 +440,11 @@ def _validate_decision(decision: dict, candidates: list[dict]) -> dict:
 
 
 async def _check_entry_condition(agent_config, market_context: dict) -> bool:
-    """베어·컨트라리안 진입 조건 체크"""
+    """베어 진입 조건 체크 (하락장/변동성 급등 시에만 진입)"""
     if agent_config.agent_id == "bear":
         regime_kr = market_context.get("regime_kr", "횡보")
         regime_us = market_context.get("regime_us", "횡보")
         return "하락" in regime_kr or "하락" in regime_us or "변동성" in regime_kr or "변동성" in regime_us
-
-    if agent_config.agent_id == "contrarian":
-        fg = market_context.get("fear_greed", {})
-        value = fg.get("value", 50) if isinstance(fg, dict) else 50
-        return value <= 25 or value >= 75
 
     return True
 
@@ -589,9 +639,32 @@ async def _execute_sell_position(position: dict, current_price: float, agent_con
     )
 
 
+async def _save_hold_log(agent_id: str, decision: dict, market_context: dict):
+    """관망(hold) 로그 저장 — 관심 종목 있음, 진입 조건 미충족"""
+    ticker = decision.get("ticker") or ""
+    next_condition = decision.get("next_condition", "")
+    risk_note = decision.get("risk_note", "")
+    report_md = decision.get("report_md") or (
+        f"## 관망 (조건 대기)\n\n"
+        f"**관심 종목**: {ticker}\n"
+        f"**다음 조건**: {next_condition}\n"
+        f"**리스크**: {risk_note}"
+    )
+    await db_execute(
+        """INSERT INTO investment_logs
+           (agent_id, log_type, tickers, report_md, market_regime_kr, market_regime_us)
+           VALUES ($1, 'hold', $2, $3, $4, $5)""",
+        (
+            agent_id, ticker or None, report_md,
+            market_context.get("regime_kr"),
+            market_context.get("regime_us"),
+        ),
+    )
+
+
 async def _save_pass_log(agent_id: str, reason: str, market_context: dict, report_md: str = None):
-    """관망 로그 저장"""
-    md = report_md or f"## 관망\n\n**사유**: {reason}"
+    """패스(pass) 로그 저장 — 전략 기준 대상 종목 없음"""
+    md = report_md or f"## 패스\n\n**사유**: {reason}"
     await db_execute(
         """INSERT INTO investment_logs
            (agent_id, log_type, report_md, market_regime_kr, market_regime_us)

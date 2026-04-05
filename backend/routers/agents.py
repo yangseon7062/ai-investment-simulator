@@ -135,7 +135,7 @@ async def get_postmortems(agent_id: str):
 
 @router.get("/stock/{ticker}/matrix")
 async def get_stock_matrix(ticker: str):
-    """종목별 7개 에이전트 스탠스 매트릭스"""
+    """종목별 5개 에이전트 스탠스 매트릭스"""
     agents = get_all_agents()
     result = []
     for a in agents:

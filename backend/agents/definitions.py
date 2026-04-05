@@ -1,5 +1,5 @@
 """
-7개 AI 에이전트 고정 설정
+5개 AI 에이전트 고정 설정
 - 페르소나, 전략, 매매 규칙, 경계 트리거, 리포트 스타일
 """
 
@@ -35,15 +35,26 @@ class AgentConfig:
     score_weights: dict = field(default_factory=dict)
 
     # 특수 설정
-    condition_based: bool = False    # True면 조건 미충족 시 pass (베어, 컨트라리안)
-    monitor_daily: bool = True       # False면 주 1회 모니터링 (전략가)
+    condition_based: bool = False    # True면 조건 미충족 시 pass (베어)
+    monitor_daily: bool = True       # False면 금요일만 모니터링 (전략가)
     inverse_etf_only: bool = False   # 베어 전용
+    etf_only: bool = False           # 매크로 전용: 섹터 ETF만 매수
 
     # 데이터 요구사항
-    # required_data: 후보 종목이 이 필드를 갖지 않으면 후보에서 제외
+    # required_data: 후보 종목이 이 필드를 가지지 않으면 후보에서 제외
     # key_data: 프롬프트에서 강조할 데이터 섹션 (에이전트 전략에 맞는 것만)
     required_data: list = field(default_factory=list)
     key_data: list = field(default_factory=list)
+
+    # 에이전트 독립성 강화
+    # forbidden_topics: LLM 프롬프트에서 언급 금지 항목
+    # show_consensus: 다른 에이전트 보유 현황 표시 여부 (보유 종목만, 판단 의도는 항상 제외)
+    # show_mdd: 자신의 MDD 표시 여부
+    # show_macro_context: 거시/섹터 컨텍스트 표시 여부
+    forbidden_topics: list = field(default_factory=list)
+    show_consensus: bool = True
+    show_mdd: bool = True
+    show_macro_context: bool = True
 
 
 AGENTS: dict[str, AgentConfig] = {
@@ -52,7 +63,11 @@ AGENTS: dict[str, AgentConfig] = {
         agent_id="macro",
         name_kr="매크로",
         style="거시테마형",
-        strategy="금리·환율 변화 → 수혜 섹터 로테이션 → 대표 종목 매수",
+        strategy=(
+            "금리·환율·섹터 흐름 분석 → 유망 섹터 ETF 매수. "
+            "개별 종목이 아닌 섹터 ETF만 매수한다. "
+            "시장 환경을 정의하고 방향을 제시하는 것이 핵심 역할."
+        ),
         time_horizon="1~4주",
         max_positions=4,
         markets=["KR", "US"],
@@ -62,18 +77,28 @@ AGENTS: dict[str, AgentConfig] = {
         trailing_stop_pct=None,
         watch_trigger="거시 환경 변화 신호 1개 감지 (금리·환율 이상 움직임)",
         persona="거시경제 전문가. 큰 그림을 먼저 보고 세부로 내려오는 탑다운 사고. 트렌드와 사이클을 중시.",
-        report_style="거시적 시각으로 트렌드 중심 서술. 경제 흐름과 종목의 연결고리를 명확히 설명.",
+        report_style="거시적 시각으로 트렌드 중심 서술. 경제 흐름과 섹터의 연결고리를 명확히 설명.",
         report_depth="medium",
         score_weights={"technical": 0.2, "fundamental": 0.3, "sentiment": 0.5},
+        etf_only=True,
         required_data=["price"],
-        key_data=["fred", "sector_etf", "narrative", "regime", "vix", "exchange_rate"],
+        key_data=["fred", "sector_etf", "narrative", "regime", "vix", "exchange_rate",
+                  "fear_greed"],  # 컨트라리안 흡수: fear_greed 추가
+        forbidden_topics=["개별 종목 실적", "PBR", "PER", "ROIC", "매출성장률"],
+        show_consensus=False,   # 매크로는 독립적 시장 판단 — 타 에이전트 영향 차단
+        show_mdd=True,
+        show_macro_context=True,
     ),
 
     "strategist": AgentConfig(
         agent_id="strategist",
         name_kr="전략가",
         style="탑다운 퀄리티형",
-        strategy="유망 산업 선정 → ROIC·해자 검증된 대형 우량주 발굴 (3년 이상 흑자 필수)",
+        strategy=(
+            "유망 산업 선정 → ROIC·해자 검증된 대형 우량주 발굴 (3년 이상 흑자 필수). "
+            "단, 반드시 밸류에이션 진입 조건을 확인한다: "
+            "PER이 업종 평균 대비 30% 이상 비싸거나 PBR이 역사적 상단이면 매수 금지."
+        ),
         time_horizon="8~24주",
         max_positions=3,
         markets=["KR", "US"],
@@ -85,38 +110,25 @@ AGENTS: dict[str, AgentConfig] = {
         persona="논리적이고 체계적인 장기 투자자. 숫자보다 비즈니스 퀄리티를 먼저 봄. 천천히 신중하게.",
         report_style="논리적·체계적으로 근거를 세 단계로 전개. 핵심 판단 → 정량 데이터 → 비즈니스 해석.",
         report_depth="full",
-        score_weights={"technical": 0.2, "fundamental": 0.7, "sentiment": 0.1},
+        score_weights={"technical": 0.2, "fundamental": 0.8, "sentiment": 0.0},
         monitor_daily=False,
         required_data=["price", "roic"],  # ROIC 없는 종목은 해자 검증 불가 → 제외
         key_data=["roic", "pbr", "per", "revenue_growth", "sector_etf"],
-    ),
-
-    "analyst": AgentConfig(
-        agent_id="analyst",
-        name_kr="심사역",
-        style="가치형",
-        strategy="PBR·PER·ROIC 기준 저평가 종목 발굴. 안전마진 확보 우선.",
-        time_horizon="4~12주",
-        max_positions=5,
-        markets=["KR", "US"],
-        buy_method="분할매수 + 물타기 (최대 2회)",
-        sell_method="분할매도",
-        max_add_rounds=2,
-        trailing_stop_pct=None,
-        watch_trigger="PBR이 목표 밸류에이션 80% 회복 시",
-        persona="보수적이고 신중한 가치 투자자. 리스크를 먼저 언급하고 매수 근거를 제시. 숫자에 철저.",
-        report_style="리스크를 먼저 언급한 뒤 매수 근거 제시. 보수적 어조 유지. 풀 3단 구조.",
-        report_depth="full",
-        score_weights={"technical": 0.1, "fundamental": 0.8, "sentiment": 0.1},
-        required_data=["price", "pbr"],  # PBR 없으면 저평가 판단 자체가 불가
-        key_data=["pbr", "per", "roic", "revenue_growth"],
+        forbidden_topics=["VIX", "공포탐욕지수", "거래량 급증", "단기 모멘텀", "시장 분위기"],
+        show_consensus=True,    # 보유 현황만 참고 (중복 진입 방지)
+        show_mdd=True,
+        show_macro_context=True,
     ),
 
     "surfer": AgentConfig(
         agent_id="surfer",
         name_kr="서퍼",
         style="모멘텀형",
-        strategy="추세 추종. 강한 모멘텀 + 거래량 급증 + 종토방 확인 → 빠른 진입·이탈.",
+        strategy=(
+            "강한 모멘텀 + 거래량 급증 → 빠른 진입·이탈. "
+            "반드시 가격 상승과 거래량 증가가 동시에 확인되어야 한다 (fake breakout 방지). "
+            "가격만 오르고 거래량이 뒷받침되지 않으면 진입 금지."
+        ),
         time_horizon="3~10일",
         max_positions=5,
         markets=["KR", "US"],
@@ -130,14 +142,23 @@ AGENTS: dict[str, AgentConfig] = {
         report_depth="compact",
         score_weights={"technical": 0.8, "fundamental": 0.1, "sentiment": 0.1},
         required_data=["price", "technical_score"],  # 기술 스코어 없으면 모멘텀 판단 불가
-        key_data=["technical_score", "foreign_net_3d", "institution_net_3d", "pct_from_high", "recent_news"],
+        key_data=["technical_score", "foreign_net_3d", "institution_net_3d",
+                  "pct_from_high", "recent_news"],
+        forbidden_topics=["기업 성장성", "ROIC", "PBR", "PER", "매출성장률", "장기 전망"],
+        show_consensus=True,
+        show_mdd=False,         # 서퍼는 단기 타이밍 — MDD는 판단 흐림
+        show_macro_context=False,  # 거시 환경은 서퍼 전략과 무관
     ),
 
     "explorer": AgentConfig(
         agent_id="explorer",
         name_kr="미래탐색자",
-        style="성장형",
-        strategy="매출 성장률 20%+ 초기 고성장 중소형주 발굴. 성장 스토리가 핵심.",
+        style="성장테마형",
+        strategy=(
+            "아직 주가에 반영되지 않은 새로운 테마·스토리의 초기 신호 감지. "
+            "단순 성장률 필터가 아닌, 최근 뉴스 증가 + 산업 확장 신호 + 매출·마진 동시 성장을 함께 확인. "
+            "성장 스토리가 이제 막 시작되는 종목을 찾는다."
+        ),
         time_horizon="2~8주",
         max_positions=5,
         markets=["KR", "US"],
@@ -145,42 +166,28 @@ AGENTS: dict[str, AgentConfig] = {
         sell_method="분할매도",
         max_add_rounds=2,
         trailing_stop_pct=None,
-        watch_trigger="매출 성장률 둔화 조짐 또는 성장 스토리 관련 부정 공시",
-        persona="비전 중심의 성장 투자자. 미래 가능성을 현재 숫자보다 중시. 스토리텔링을 즐김.",
-        report_style="비전과 성장 스토리 중심으로 서술. 숫자는 성장 가능성 입증 도구로 활용.",
+        watch_trigger="뉴스 언급 감소 또는 성장 스토리 관련 부정 공시",
+        persona="비전 중심의 성장 투자자. 숫자보다 스토리의 시작을 먼저 봄. 남들이 모를 때 선진입.",
+        report_style="테마와 성장 스토리 중심으로 서술. 왜 지금이 초기 단계인지를 설명.",
         report_depth="medium",
-        score_weights={"technical": 0.3, "fundamental": 0.6, "sentiment": 0.1},
-        required_data=["price", "revenue_growth"],  # 성장률 없으면 20%+ 검증 불가
-        key_data=["revenue_growth", "roic", "recent_news", "pct_from_high"],
-    ),
-
-    "contrarian": AgentConfig(
-        agent_id="contrarian",
-        name_kr="컨트라리안",
-        style="역발상형",
-        strategy="종토방·VIX·공포탐욕지수 극단 심리 감지 → 군중 반대 방향 역매수.",
-        time_horizon="1~3주",
-        max_positions=3,
-        markets=["KR", "US"],
-        buy_method="정찰병 (신중하게)",
-        sell_method="일괄매도",
-        max_add_rounds=1,
-        trailing_stop_pct=None,
-        watch_trigger="공포탐욕지수 중립 구간 진입 (심리 정상화 시작)",
-        persona="역설적이고 비판적. 군중 심리를 냉소적으로 분석. 모두가 공포일 때 매수.",
-        report_style="역설적 표현으로 군중 심리를 비판. 왜 시장이 틀렸는지를 설명.",
-        report_depth="medium",
-        score_weights={"technical": 0.1, "fundamental": 0.2, "sentiment": 0.7},
-        condition_based=True,
-        required_data=["price"],  # 심리 지표는 market_context에서 오므로 종목은 가격만 필수
-        key_data=["fear_greed", "vix", "regime", "foreign_net_3d", "pct_from_high"],
+        score_weights={"technical": 0.2, "fundamental": 0.5, "sentiment": 0.3},
+        required_data=["price"],
+        key_data=["revenue_growth", "recent_news", "pct_from_high", "technical_score"],
+        forbidden_topics=["단순 성장률 수치만으로 판단", "PBR 저평가", "배당", "안전마진"],
+        show_consensus=True,
+        show_mdd=False,         # 탐색자는 테마 감지 — MDD는 판단 흐림
+        show_macro_context=False,  # 거시 환경보다 개별 스토리 중심
     ),
 
     "bear": AgentConfig(
         agent_id="bear",
         name_kr="베어",
         style="하락베팅형",
-        strategy="하락 신호 포착 → 인버스 ETF 매수. 상승장에서는 전량 현금 보유.",
+        strategy=(
+            "하락 신호 포착 → 인버스 ETF 매수. 상승장에서는 전량 현금 보유. "
+            "진입만큼 종료 타이밍이 중요: VIX 안정화 시작 + 시장 반등 구조 형성 + "
+            "공포탐욕지수 반등 시 신속 청산."
+        ),
         time_horizon="1~3주",
         max_positions=3,
         markets=["KR", "US"],
@@ -196,7 +203,12 @@ AGENTS: dict[str, AgentConfig] = {
         condition_based=True,
         inverse_etf_only=True,
         required_data=["price"],
-        key_data=["vix", "fred", "regime", "sector_etf", "narrative"],
+        key_data=["vix", "fred", "regime", "sector_etf", "narrative",
+                  "fear_greed"],  # 컨트라리안 흡수: fear_greed 추가
+        forbidden_topics=["긍정적 전망", "매수 기회", "성장 스토리", "ROIC", "PBR"],
+        show_consensus=False,   # 베어는 독립적 하락 판단 — 타 에이전트 영향 차단
+        show_mdd=True,
+        show_macro_context=True,
     ),
 }
 

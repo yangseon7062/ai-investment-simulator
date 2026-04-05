@@ -8,7 +8,8 @@ const LOG_TYPE_LABELS = {
     buy:         '매수',
     sell:        '매도',
     monitor:     '모니터',
-    pass:        '관망',
+    hold:        '관망',       // 관심 있음, 조건 대기
+    pass:        '패스',       // 전략 기준 대상 없음
     postmortem:  '사후검증',
     debate:      '토론',
     roundtable:  '라운드테이블',
@@ -19,6 +20,7 @@ const LOG_TYPE_CHIPS = {
     buy:         'chip-buy',
     sell:        'chip-sell',
     monitor:     'chip-monitor',
+    hold:        'chip-monitor',   // 관망 — 모니터와 유사한 톤
     pass:        'chip-pass',
     postmortem:  'chip-postmortem',
     debate:      'chip-debate',

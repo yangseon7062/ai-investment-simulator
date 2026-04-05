@@ -249,17 +249,21 @@ async def generate_agent_decision(
     recent_logs: list[dict],
     recent_losses: list[dict] | None = None,
     extra_context: dict | None = None,
+    consensus_map: dict | None = None,
 ) -> dict:
     """
     에이전트 투자 판단 생성
     반환: {
-        "decision": "buy|pass",
+        "decision": "buy|hold|pass",
         "ticker": str | None,
         "market": "KR|US",
         "price": float,
-        "entry_advice": str,  (분할매수 or 일괄매수 권장)
+        "entry_advice": str,
         "thesis": str,
-        "report_md": str  (근거 3단 구조)
+        "next_condition": str,  (다음 판단 조건)
+        "risk_note": str,       (리스크 한 줄)
+        "confidence": str,      (low|medium|high)
+        "report_md": str
     }
     """
     # Plan A: macro/strategist/bear — 고정 프레임워크 시스템 프롬프트에 삽입
@@ -291,12 +295,19 @@ async def generate_agent_decision(
     )
     key_data_section = f"\n핵심 판단 데이터 (당신의 전략상 가장 중요한 항목):\n{key_data_lines}" if key_data_lines else ""
 
+    # 금지 규칙 섹션 (에이전트 독립성 강화)
+    forbidden_topics = getattr(agent_config, "forbidden_topics", [])
+    forbidden_section = ""
+    if forbidden_topics:
+        forbidden_lines = "\n".join(f"  - {t}" for t in forbidden_topics)
+        forbidden_section = f"\n❌ 절대 언급·사용 금지 항목 (이 에이전트 전략과 무관):\n{forbidden_lines}\n"
+
     system = f"""당신은 '{agent_config.name_kr}'라는 AI 투자 에이전트입니다.
 페르소나: {agent_config.persona}
 전략: {agent_config.strategy}
 투자 시간축: {agent_config.time_horizon}
 리포트 스타일: {agent_config.report_style}
-{macro_lens}{key_data_section}
+{macro_lens}{key_data_section}{forbidden_section}
 
 모든 판단은 한국어로 작성하세요.
 전문 용어 사용 시 반드시 괄호로 설명을 추가하세요. (예: PBR(주가순자산비율))
@@ -305,7 +316,11 @@ async def generate_agent_decision(
 ⚠️ 데이터 누락 처리 원칙:
 - "⚠️없음"으로 표시된 항목은 데이터가 수집되지 않은 것이다. 해당 항목을 투자 근거로 사용하지 말 것.
 - data_gaps 필드가 있는 종목은 누락 데이터를 리포트에 명시할 것.
-- 당신의 required_data(핵심 판단 데이터)가 "⚠️없음"인 종목은 pass 처리할 것."""
+- 당신의 required_data(핵심 판단 데이터)가 "⚠️없음"인 종목은 pass 처리할 것.
+
+📋 판단 구조 규칙:
+- hold(관망): 관심 종목이 있으나 아직 진입 조건 미충족 — 추후 재검토 예정
+- pass: 오늘 이 전략 기준으로 적합한 종목 자체가 없음 — 당분간 재검토 불필요"""
 
     # Plan B: 모든 에이전트 — 임계값 초과 시 동적 경고 주입
     warning_context = _build_market_warning_context(market_context)
@@ -397,23 +412,32 @@ gold 변화: {market_context.get('gold_change_pct', 0):+.1f}% | S&P500 변화: {
 ## 최근 30일 내 판단 기록
 {json.dumps(recent_logs[-10:], ensure_ascii=False, indent=2)}
 
+## 다른 에이전트 보유 현황 (중복 진입 참고용 — 판단은 독립적으로)
+{json.dumps(consensus_map or {}, ensure_ascii=False, indent=2)}
+
 ---
 
 위 정보를 바탕으로 오늘의 투자 판단을 하세요.
 
-매수 판단 시 종목 변동성·확신도를 고려해 분할매수(여러 번 나눠서 매수) 또는 일괄매수를 entry_advice에 명시하세요.
+**판단 기준:**
+- buy: 지금 매수할 종목이 있다
+- hold: 관심 종목이 있으나 진입 조건 미충족 (다음 조건 명시 필수)
+- pass: 오늘 내 전략 기준으로 적합한 종목 없음
 
 **반드시 다음 JSON 형식으로 응답:**
 {{
-  "decision": "buy 또는 pass",
-  "ticker": "종목코드 또는 null",
-  "market": "KR 또는 US",
-  "name": "종목명",
-  "price": 매수가격(전일 종가 기준),
-  "entry_advice": "분할매수 권장 - 변동성 높아 3회 분할 / 일괄매수 권장 - 확신도 높음 (buy일 때만, pass면 null)",
-  "thesis": "투자 테제 한 문장",
-  "report_md": "## 오늘의 판단\\n\\n### 핵심 판단\\n...\\n\\n### 데이터 근거\\n...\\n\\n### AI 해석\\n...",
-  "pass_reason": "pass 선택 시 이유 (buy면 null)"
+  "decision": "buy 또는 hold 또는 pass",
+  "ticker": "종목코드 (buy일 때만, 나머지 null)",
+  "market": "KR 또는 US (buy일 때만)",
+  "name": "종목명 (buy일 때만)",
+  "price": 매수가격_숫자 (buy일 때만, 나머지 0),
+  "entry_advice": "기준가 X원. 하락 시 Y원에서 추가 매수 / 일괄매수 (buy일 때만, 나머지 null)",
+  "thesis": "투자 테제 한 문장 (buy/hold일 때)",
+  "next_condition": "다음에 언제 다시 판단할지 — 예: 'RSI 50 이하로 내려오면 재검토' / '다음 주 실적 발표 후 확인'",
+  "risk_note": "이 판단이 틀릴 수 있는 이유 한 줄",
+  "confidence": "low 또는 medium 또는 high",
+  "report_md": "## [{agent_config.name_kr}] 오늘의 판단\\n\\n**[결론]** buy/hold/pass\\n\\n**[이유]** 이 전략 기준 2~3개 근거만\\n\\n**[행동]** 지금 할 행동 구체적으로\\n\\n**[다음 조건]** 언제 다시 볼지\\n\\n**[리스크]** 틀릴 수 있는 이유",
+  "pass_reason": "pass/hold 선택 시 이유 (buy면 null)"
 }}
 """
     result = await _call_claude(prompt, system, f"agent_decision_{agent_config.agent_id}")
@@ -432,6 +456,9 @@ gold 변화: {market_context.get('gold_change_pct', 0):+.1f}% | S&P500 변화: {
             "price": 0,
             "entry_advice": None,
             "thesis": None,
+            "next_condition": None,
+            "risk_note": None,
+            "confidence": "low",
             "report_md": f"## 판단 오류\n\n분석 중 오류가 발생했습니다.\n\n원본:\n{result}",
             "pass_reason": "분석 오류",
         }
@@ -451,9 +478,9 @@ async def monitor_position(
     보유 포지션 테제 유효성 체크
     반환: {"status": "hold|watch|sell", "report_md": str, "thesis_valid": bool}
     """
-    # Plan A: strategist/analyst — 이익 반응 테스트 시스템 프롬프트에 삽입
+    # Plan A: strategist — 이익 반응 테스트 시스템 프롬프트에 삽입
     earnings_test_note = ""
-    if agent_config.agent_id in ("strategist", "analyst"):
+    if agent_config.agent_id == "strategist":
         earnings_test_note = """
 이익 반응 테스트 원칙:
 - 실적이 예상치를 상회했음에도 주가가 무반응이거나 하락했다면,
