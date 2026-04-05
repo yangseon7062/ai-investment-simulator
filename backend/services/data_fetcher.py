@@ -430,6 +430,83 @@ async def get_gold_equity_signal() -> dict:
     }
 
 
+# ── 거시 지표 변화율 (5일/20일/3개월) ──────────────────────────────
+async def get_macro_change_rates() -> dict:
+    """
+    VIX·환율·FRED 주요 지표의 5일/20일/3개월 변화율 계산
+    rate 계열(금리·스프레드): 절대 변화 (pp)
+    VIX: 절대 변화 (포인트)
+    환율: % 변화
+    반환: {
+        "vix_5d": 절대변화, "vix_20d": ..., "vix_3m": ...,
+        "krw_5d_pct": % 변화, "krw_20d_pct": ..., "krw_3m_pct": ...,
+        "10y_yield_5d": pp, ...,
+        "hy_spread_5d": pp, ...,
+        "ig_spread_5d": pp, ...,
+    }
+    """
+    loop = asyncio.get_event_loop()
+
+    def _fetch_yf_changes():
+        result = {}
+        for symbol, prefix, mode in [
+            ("^VIX",  "vix",  "abs"),   # VIX: 절대 변화
+            ("KRW=X", "krw",  "pct"),   # 환율: % 변화
+        ]:
+            try:
+                hist = yf.Ticker(symbol).history(period="100d")
+                if hist.empty:
+                    continue
+                prices = hist["Close"].dropna()
+                for days, suffix in [(5, "5d"), (20, "20d"), (63, "3m")]:
+                    if len(prices) <= days:
+                        continue
+                    prev = float(prices.iloc[-days - 1])
+                    curr = float(prices.iloc[-1])
+                    if mode == "abs":
+                        result[f"{prefix}_{suffix}"] = round(curr - prev, 2)
+                    else:
+                        if prev > 0:
+                            result[f"{prefix}_{suffix}_pct"] = round((curr - prev) / prev * 100, 2)
+            except Exception:
+                pass
+        return result
+
+    def _fetch_fred_changes():
+        if not FRED_API_KEY:
+            return {}
+        try:
+            fred = Fred(api_key=FRED_API_KEY)
+            series_map = {
+                "10y_yield": "DGS10",
+                "2y_yield":  "DGS2",
+                "hy_spread": "BAMLH0A0HYM2",
+                "ig_spread": "BAMLC0A0CM",
+            }
+            result = {}
+            start = (datetime.now() - timedelta(days=100)).strftime("%Y-%m-%d")
+            for key, series_id in series_map.items():
+                try:
+                    series = fred.get_series(series_id, observation_start=start).dropna()
+                    if len(series) < 5:
+                        continue
+                    for days, suffix in [(5, "5d"), (20, "20d"), (63, "3m")]:
+                        if len(series) > days:
+                            delta = round(float(series.iloc[-1]) - float(series.iloc[-days - 1]), 3)
+                            result[f"{key}_{suffix}"] = delta
+                except Exception:
+                    pass
+            return result
+        except Exception:
+            return {}
+
+    yf_changes, fred_changes = await asyncio.gather(
+        loop.run_in_executor(None, _fetch_yf_changes),
+        loop.run_in_executor(None, _fetch_fred_changes),
+    )
+    return {**yf_changes, **fred_changes}
+
+
 # ── 한국 시장 특수 요소 ─────────────────────────────────────────────
 async def get_kr_market_special() -> dict:
     """선물 만기일 여부 등 (간단 체크)"""

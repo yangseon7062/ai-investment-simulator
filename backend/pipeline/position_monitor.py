@@ -81,9 +81,10 @@ async def run_position_monitor(market: str):
                         (current_price, pos["id"]),
                     )
 
-            # Claude 테제 유효성 체크
+            # Claude 테제 유효성 체크 — buy_report 전문 제외 (TPM 절약)
+            pos_for_monitor = {k: v for k, v in pos.items() if k != "buy_report"}
             result = await monitor_position(
-                agent, pos, current_price, market_context, pos.get("thesis", ""),
+                agent, pos_for_monitor, current_price, market_context, pos.get("thesis", ""),
             )
 
             new_status = result.get("status", "hold")
@@ -167,8 +168,8 @@ async def _execute_sell(position: dict, current_price: float, agent, reason: str
     )
 
 
-async def check_sector_concentration() -> list[str]:
-    """전체 포지션 섹터 집중도 60%+ 경고"""
+async def check_sector_concentration() -> list[dict]:
+    """전체 포지션 섹터 집중도 60%+ 경고 → event_logs 저장 + 반환"""
     async with get_db() as conn:
         rows = [dict(r) for r in await conn.fetch(
             """SELECT t.agent_id, c.sector, COUNT(*) as cnt
@@ -192,7 +193,24 @@ async def check_sector_concentration() -> list[str]:
         if total == 0:
             continue
         for sector, cnt in sectors.items():
-            if cnt / total >= 0.6:
-                warnings.append(f"{agent_id}: {sector} {cnt/total*100:.0f}% 집중")
+            pct = cnt / total * 100
+            if pct >= 60:
+                warnings.append({
+                    "agent_id": agent_id,
+                    "sector": sector,
+                    "pct": round(pct, 1),
+                    "msg": f"{agent_id}: {sector} {pct:.0f}% 집중",
+                })
+
+    if warnings:
+        import json as _json
+        agents_involved = list({w["agent_id"] for w in warnings})
+        desc = " / ".join(w["msg"] for w in warnings)
+        await db_execute(
+            """INSERT INTO event_logs (event_type, description, triggered_agents)
+               VALUES ($1, $2, $3)""",
+            ("sector_concentration", desc, _json.dumps(agents_involved)),
+        )
+        print(f"  [섹터집중도] 경고 {len(warnings)}건: {desc}")
 
     return warnings

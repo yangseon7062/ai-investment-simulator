@@ -34,7 +34,7 @@ async def get_summary():
 
 @router.get("/portfolio")
 async def get_unified_portfolio():
-    """7개 에이전트 통합 포트폴리오 뷰"""
+    """5개 에이전트 통합 포트폴리오 뷰"""
     rows = await fetchall(
         """SELECT t.ticker, c.name, t.market, c.sector,
                   COUNT(DISTINCT t.agent_id) AS agent_count,
@@ -106,6 +106,18 @@ async def get_consensus():
             "same_reason": same_reason,
         })
     return result
+
+
+@router.get("/sector-concentration")
+async def get_sector_concentration():
+    """섹터 집중도 60%+ 경고 — event_logs 최신 건"""
+    rows = await fetchall(
+        """SELECT description, triggered_agents, created_at
+           FROM event_logs
+           WHERE event_type = 'sector_concentration'
+           ORDER BY created_at DESC LIMIT 10"""
+    )
+    return [dict(r) for r in rows]
 
 
 @router.get("/notifications")

@@ -2,15 +2,17 @@
 뉴스 수집
 - RSS: 연합인포맥스, Reuters KR, 한국은행, Fed
 - 네이버 뉴스 종목 검색 스크래핑 (국내 개별 종목)
+- news_articles DB 저장 (뉴스 증가율 집계용)
 """
 
 import asyncio
 import httpx
 import feedparser
-from datetime import datetime
+from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 from typing import Optional
 from backend.services.groq_service import summarize_macro_news, classify_stock_news
+from backend.database import execute as db_execute, fetchall
 
 
 RSS_FEEDS = {
@@ -80,7 +82,97 @@ async def fetch_naver_stock_news(ticker: str, stock_name: str) -> list[dict]:
     except Exception:
         pass
 
+    # DB 저장 (뉴스 증가율 집계용) — 저장 실패해도 수집 결과에 영향 없음
+    if news_list:
+        for item in news_list:
+            item["market"] = "KR"
+        try:
+            await save_news_to_db(news_list)
+        except Exception:
+            pass
+
     return news_list
+
+
+async def save_news_to_db(articles: list[dict]):
+    """
+    뉴스 기사 DB 저장 (news_articles 테이블)
+    중복 방지: 같은 날 동일 ticker+title은 저장하지 않음
+    """
+    for article in articles:
+        try:
+            title = article.get("title", "").strip()
+            if not title:
+                continue
+            ticker  = article.get("ticker")
+            market  = article.get("market")
+            source  = article.get("source")
+            pub_raw = article.get("published")
+            published_at = None
+            if pub_raw:
+                try:
+                    published_at = datetime.fromisoformat(str(pub_raw)[:19])
+                except Exception:
+                    published_at = datetime.now()
+
+            await db_execute(
+                """INSERT INTO news_articles (ticker, market, title, source, published_at)
+                   SELECT $1, $2, $3, $4, $5
+                   WHERE NOT EXISTS (
+                       SELECT 1 FROM news_articles
+                       WHERE ticker IS NOT DISTINCT FROM $1
+                         AND title = $3
+                         AND created_at >= NOW() - INTERVAL '24 hours'
+                   )""",
+                (ticker, market, title, source, published_at),
+            )
+        except Exception:
+            pass
+
+
+async def get_news_trend(ticker: str, market: str) -> dict:
+    """
+    종목별 주간 뉴스 증가율 계산
+    반환: {
+        "this_week": 이번주 기사 수,
+        "prev_week": 지난주 기사 수,
+        "growth_pct": 증가율 (%),
+        "available": 데이터 존재 여부
+    }
+    """
+    try:
+        rows = await fetchall(
+            """SELECT COUNT(*) as cnt,
+                      CASE WHEN published_at >= NOW() - INTERVAL '7 days'
+                           THEN 'this_week' ELSE 'prev_week' END as period
+               FROM news_articles
+               WHERE ticker = $1
+                 AND (market = $2 OR market IS NULL)
+                 AND published_at >= NOW() - INTERVAL '14 days'
+               GROUP BY period""",
+            (ticker, market),
+        )
+        count_map = {r["period"]: int(r["cnt"]) for r in rows}
+        this_week = count_map.get("this_week", 0)
+        prev_week = count_map.get("prev_week", 0)
+
+        if this_week == 0 and prev_week == 0:
+            return {"available": False}
+
+        growth_pct = None
+        if prev_week > 0:
+            growth_pct = round((this_week - prev_week) / prev_week * 100, 1)
+        elif this_week > 0:
+            growth_pct = 100.0  # 지난주 0건 → 이번주 발생 = 100% 증가로 표현
+
+        return {
+            "available": True,
+            "this_week": this_week,
+            "prev_week": prev_week,
+            "growth_pct": growth_pct,
+        }
+    except Exception:
+        return {"available": False}
 
 
 async def fetch_all_stock_news(tickers_names: list[tuple]) -> dict:

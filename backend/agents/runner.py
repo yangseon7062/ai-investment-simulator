@@ -27,10 +27,11 @@ async def run_single_agent(agent_config, market_context: dict) -> dict:
     print(f"  [{agent_id}] 시작")
 
     # 1. 보유 포지션 테제 체크 → 매도 판단
+    # 16:00 실행 시 KR만 모니터링 (US는 07:30 job_us_monitor에서 별도 처리)
     # monitor_daily=False인 에이전트(전략가)는 금요일에만 모니터링
     today_weekday = datetime.now().weekday()  # 0=월 ~ 4=금
     if agent_config.monitor_daily or today_weekday == 4:
-        await _monitor_and_sell(agent_id, agent_config, market_context)
+        await _monitor_and_sell(agent_id, agent_config, market_context, monitor_market="KR")
 
     # 2. 매도 후 보유 포지션 재조회 (PnL + thesis 포함)
     today_date = date.today()
@@ -130,7 +131,7 @@ async def run_single_agent(agent_config, market_context: dict) -> dict:
     if len(positions) >= agent_config.max_positions:
         return {"agent_id": agent_id, "decision": "pass", "reason": "최대 종목 수 도달"}
 
-    # 조건 기반 에이전트 (베어, 컨트라리안) — 조건 체크
+    # 조건 기반 에이전트 (베어) — 조건 체크
     if agent_config.condition_based:
         if not await _check_entry_condition(agent_config, market_context):
             await _save_pass_log(agent_id, "진입 조건 미충족", market_context)
@@ -256,7 +257,7 @@ async def run_single_agent(agent_config, market_context: dict) -> dict:
 
     # 후보 종목 추가 정보 수집 (뉴스 + 수급 + 52주 고저)
     # volume_spike 종목 포함하여 전체 후보에서 뉴스 수집 (top5 제한 제거)
-    from backend.services.news_fetcher import fetch_naver_stock_news
+    from backend.services.news_fetcher import fetch_naver_stock_news, get_news_trend
     from backend.services.data_fetcher import get_yfinance_news, get_foreign_buying, get_52week_high_low
 
     kr_all = [(c["ticker"], c.get("name", c["ticker"])) for c in candidates if c.get("market") == "KR"]
@@ -295,32 +296,137 @@ async def run_single_agent(agent_config, market_context: dict) -> dict:
                 if c.get("market") == mkt and c["ticker"] in hw:
                     c.update(hw[c["ticker"]])
 
-    # PBR/PER/ROIC/revenue_growth (financials_cache 배치 쿼리)
+    # PBR/PER/ROIC/revenue_growth (financials_cache — 최근 8분기 시계열 조회)
     ticker_market_pairs = [(c["ticker"], c.get("market", "KR")) for c in candidates]
+    is_strategist = (agent_id == "strategist")
     if ticker_market_pairs:
         tickers_only = [t for t, _ in ticker_market_pairs]
         async with get_db() as conn:
             fin_rows = await conn.fetch(
-                """SELECT DISTINCT ON (ticker, market)
-                          ticker, market, pbr, per, roic, revenue_growth,
+                """SELECT ticker, market, fiscal_quarter, pbr, per, roic, revenue_growth,
                           gross_margin, fcf, debt_ratio
                    FROM financials_cache
                    WHERE ticker = ANY($1)
                    ORDER BY ticker, market, fiscal_quarter DESC""",
                 tickers_only,
             )
-        fin_map = {(r["ticker"], r["market"]): dict(r) for r in fin_rows}
+            # 업종 평균 PER/PBR (sector_valuations 테이블 — Stage 2에서 적재)
+            sector_val_rows = await conn.fetch(
+                """SELECT market, sector, median_per, median_pbr
+                   FROM sector_valuations
+                   WHERE calc_date = (SELECT MAX(calc_date) FROM sector_valuations)""",
+            ) if await conn.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name='sector_valuations')"
+            ) else []
+
+        # 분기 시계열 그룹핑 (ticker+market → 최대 8분기)
+        from collections import defaultdict
+        fin_history: dict = defaultdict(list)
+        for r in fin_rows:
+            key = (r["ticker"], r["market"])
+            if len(fin_history[key]) < 8:
+                fin_history[key].append(dict(r))
+
+        sector_val_map = {(r["market"], r["sector"]): dict(r) for r in sector_val_rows}
+
         for c in candidates:
             key = (c["ticker"], c.get("market", "KR"))
-            if key in fin_map:
-                row = fin_map[key]
-                c["pbr"] = row["pbr"]
-                c["per"] = row["per"]
-                c["roic"] = row["roic"]
-                c["revenue_growth"] = row["revenue_growth"]
-                c["gross_margin"] = row["gross_margin"]
-                c["fcf"] = row["fcf"]
-                c["debt_ratio"] = row["debt_ratio"]
+            rows_for_ticker = fin_history.get(key, [])
+            if not rows_for_ticker:
+                continue
+
+            # 최신 분기 값 → 현재 필드
+            latest = rows_for_ticker[0]
+            c["pbr"] = latest["pbr"]
+            c["per"] = latest["per"]
+            c["roic"] = latest["roic"]
+            c["revenue_growth"] = latest["revenue_growth"]
+            c["gross_margin"] = latest["gross_margin"]
+            c["fcf"] = latest["fcf"]
+            c["debt_ratio"] = latest["debt_ratio"]
+
+            quarter_count = len(rows_for_ticker)
+            roic_values = [r["roic"] for r in rows_for_ticker if r["roic"] is not None]
+
+            # 데이터 충분성 플래그
+            c["has_pbr_history"] = quarter_count >= 4
+            c["has_roic_trend"] = len(roic_values) >= 4
+            c["data_quarters"] = quarter_count
+
+            # 업종 평균 PER/PBR 존재 여부
+            sector_key = (c.get("market", "KR"), c.get("sector", ""))
+            sector_val = sector_val_map.get(sector_key)
+            c["has_sector_per"] = sector_val is not None
+            if sector_val:
+                c["sector_median_per"] = sector_val["median_per"]
+                c["sector_median_pbr"] = sector_val["median_pbr"]
+
+            # 전략가·미래탐색자: 분기 시계열 데이터 첨부 (ROIC 추세, PBR 밴드, 성장 추세용)
+            # 전략가: 8분기 전체 / 미래탐색자: 4분기 (성장 스토리 시작 감지용)
+            is_explorer = (agent_id == "explorer")
+            max_quarters = 8 if is_strategist else 4
+            if (is_strategist or is_explorer) and quarter_count >= 2:
+                c["financials_history"] = [
+                    {
+                        "quarter": r["fiscal_quarter"],
+                        "roic": r["roic"],
+                        "pbr": r["pbr"],
+                        "per": r["per"],
+                        "revenue_growth": r["revenue_growth"],
+                        "gross_margin": r["gross_margin"],
+                    }
+                    for r in rows_for_ticker[:max_quarters]
+                ]
+
+    # 미래탐색자: 뉴스 증가율 첨부 (news_articles DB 축적 후 유효)
+    if agent_id == "explorer":
+        for c in candidates:
+            try:
+                trend = await get_news_trend(c["ticker"], c.get("market", "KR"))
+                if trend.get("available"):
+                    c["news_trend"] = trend
+            except Exception:
+                pass
+
+    # PBR 밴드 (전략가 전용) — financials_history PBR 값으로 역사적 범위 계산
+    if is_strategist:
+        FINANCIAL_SECTORS = {
+            "금융", "보험", "Financial Services", "Financials",
+            "리츠", "REITs", "은행", "Banking", "Insurance",
+        }
+        for c in candidates:
+            history = c.get("financials_history", [])
+            pbr_values = [h["pbr"] for h in history if h.get("pbr") is not None]
+            pbr_band_available = len(pbr_values) >= 4
+            c["pbr_band_available"] = pbr_band_available
+
+            if pbr_band_available:
+                sorted_pbrs = sorted(pbr_values)
+                pbr_min    = sorted_pbrs[0]
+                pbr_max    = sorted_pbrs[-1]
+                pbr_median = sorted_pbrs[len(sorted_pbrs) // 2]
+                current_pbr = c.get("pbr")
+                pbr_percentile = None
+                if current_pbr is not None and pbr_max > pbr_min:
+                    pbr_percentile = round(
+                        (current_pbr - pbr_min) / (pbr_max - pbr_min) * 100, 1
+                    )
+                sector = c.get("sector") or ""
+                c["pbr_band"] = {
+                    "min":         round(pbr_min, 2),
+                    "max":         round(pbr_max, 2),
+                    "median":      round(pbr_median, 2),
+                    "current":     current_pbr,
+                    "percentile":  pbr_percentile,  # 0=역사적 최저, 100=역사적 최고
+                    "quarters":    len(pbr_values),
+                    "data_source": c.get("market", "KR"),
+                }
+                c["pbr_band_caution"] = any(
+                    s.lower() in sector.lower() for s in FINANCIAL_SECTORS
+                )
+            else:
+                c["pbr_band"] = None
+                c["pbr_band_caution"] = False
 
     # 후보 종목에 공감대 정보 추가 (보유 현황만 — 판단 의도 제외)
     for c in candidates:
@@ -365,11 +471,15 @@ async def run_single_agent(agent_config, market_context: dict) -> dict:
     if decision_type == "buy" and decision.get("ticker"):
         await _execute_buy(agent_id, agent_config, decision)
     elif decision_type == "hold":
-        # hold: 관심 있으나 진입 조건 미충족 — 로그 타입 구분
         await _save_hold_log(agent_id, decision, market_context)
     else:
-        # pass: 전략 기준 대상 없음
-        await _save_pass_log(agent_id, decision.get("pass_reason", "전략 기준 대상 없음"), market_context, decision.get("report_md"))
+        await _save_pass_log(
+            agent_id,
+            decision.get("pass_reason", "전략 기준 대상 없음"),
+            market_context,
+            decision.get("report_md"),
+            decision.get("confidence"),
+        )
 
     print(f"  [{agent_id}] 완료 → {decision.get('decision')} {decision.get('ticker', '')}")
     return {"agent_id": agent_id, **decision}
@@ -516,14 +626,16 @@ async def _execute_buy(agent_id: str, agent_config, decision: dict):
     if market == "US":
         exchange_rate = await get_exchange_rate()
 
+    confidence = decision.get("confidence")
+
     # 로그 저장 + log_id 획득
     async with get_db() as conn:
         log_id = await conn.fetchval(
             """INSERT INTO investment_logs
-               (agent_id, log_type, tickers, report_md, thesis)
-               VALUES ($1, 'buy', $2, $3, $4)
+               (agent_id, log_type, tickers, report_md, thesis, confidence)
+               VALUES ($1, 'buy', $2, $3, $4, $5)
                RETURNING id""",
-            agent_id, ticker, report_md, thesis,
+            agent_id, ticker, report_md, thesis, confidence,
         )
 
     # 매수 기록 (quantity=0, 현금 차감 없음)
@@ -540,16 +652,19 @@ async def _execute_buy(agent_id: str, agent_config, decision: dict):
         )
 
 
-async def _monitor_and_sell(agent_id: str, agent_config, market_context: dict):
-    """보유 포지션 테제 유효성 체크 → 매도 판단"""
+async def _monitor_and_sell(agent_id: str, agent_config, market_context: dict, monitor_market: str = "ALL"):
+    """보유 포지션 테제 유효성 체크 → 매도 판단
+    monitor_market: 'KR' | 'US' | 'ALL'  (07:30 US 전용 모니터링과 16:00 통합 실행 분리용)
+    """
     from backend.services.data_fetcher import get_kr_prices, get_us_prices
 
+    market_filter = f"AND t.market = '{monitor_market}'" if monitor_market != "ALL" else ""
     async with get_db() as conn:
         rows = await conn.fetch(
-            """SELECT t.*, l.report_md as buy_report, l.thesis
+            f"""SELECT t.*, l.report_md as buy_report, l.thesis
                FROM simulated_trades t
                LEFT JOIN investment_logs l ON t.log_id = l.id
-               WHERE t.agent_id = $1 AND t.status != 'closed'""",
+               WHERE t.agent_id = $1 AND t.status != 'closed' {market_filter}""",
             agent_id,
         )
         positions = [dict(r) for r in rows]
@@ -599,6 +714,22 @@ async def _monitor_and_sell(agent_id: str, agent_config, market_context: dict):
         # 최신 뉴스 포지션에 추가
         pos["recent_news"] = monitor_news_map.get(ticker, [])
 
+        # 보유 기간 계산
+        try:
+            buy_date = datetime.fromisoformat(str(pos["trade_date"])[:10]).date()
+            holding_days = (datetime.now().date() - buy_date).days
+        except Exception:
+            holding_days = 0
+
+        # 최대 보유 기간 강제 청산 (베어: 21일)
+        if agent_config.max_hold_days and holding_days >= agent_config.max_hold_days:
+            await _execute_sell_position(
+                pos, current_price, agent_config,
+                f"최대 보유 기간 {agent_config.max_hold_days}일 초과 강제 청산 (보유 {holding_days}일)",
+                market_context,
+            )
+            continue
+
         # 트레일링 스탑 (서퍼)
         if agent_config.trailing_stop_pct and pos.get("highest_price"):
             highest = pos["highest_price"]
@@ -611,15 +742,9 @@ async def _monitor_and_sell(agent_id: str, agent_config, market_context: dict):
                     (current_price, pos["id"]),
                 )
 
-        # 보유 기간 계산
-        try:
-            buy_date = datetime.fromisoformat(str(pos["trade_date"])[:10]).date()
-            holding_days = (datetime.now().date() - buy_date).days
-        except Exception:
-            holding_days = 0
-
-        # LLM 테제 유효성 체크
-        result = await monitor_position(agent_config, pos, current_price, market_context, pos.get("thesis", ""), holding_days)
+        # LLM 테제 유효성 체크 — buy_report 전문은 프롬프트에서 제외 (TPM 절약)
+        pos_for_monitor = {k: v for k, v in pos.items() if k != "buy_report"}
+        result = await monitor_position(agent_config, pos_for_monitor, current_price, market_context, pos.get("thesis", ""), holding_days)
         new_status = result.get("status", "hold")
 
         await db_execute(
@@ -691,6 +816,7 @@ async def _save_hold_log(agent_id: str, decision: dict, market_context: dict):
     ticker = decision.get("ticker") or ""
     next_condition = decision.get("next_condition", "")
     risk_note = decision.get("risk_note", "")
+    confidence = decision.get("confidence")
     report_md = decision.get("report_md") or (
         f"## 관망 (조건 대기)\n\n"
         f"**관심 종목**: {ticker}\n"
@@ -699,25 +825,25 @@ async def _save_hold_log(agent_id: str, decision: dict, market_context: dict):
     )
     await db_execute(
         """INSERT INTO investment_logs
-           (agent_id, log_type, tickers, report_md, market_regime_kr, market_regime_us)
-           VALUES ($1, 'hold', $2, $3, $4, $5)""",
+           (agent_id, log_type, tickers, report_md, confidence, market_regime_kr, market_regime_us)
+           VALUES ($1, 'hold', $2, $3, $4, $5, $6)""",
         (
-            agent_id, ticker or None, report_md,
+            agent_id, ticker or None, report_md, confidence,
             market_context.get("regime_kr"),
             market_context.get("regime_us"),
         ),
     )
 
 
-async def _save_pass_log(agent_id: str, reason: str, market_context: dict, report_md: str = None):
+async def _save_pass_log(agent_id: str, reason: str, market_context: dict, report_md: str = None, confidence: str = None):
     """패스(pass) 로그 저장 — 전략 기준 대상 종목 없음"""
     md = report_md or f"## 패스\n\n**사유**: {reason}"
     await db_execute(
         """INSERT INTO investment_logs
-           (agent_id, log_type, report_md, market_regime_kr, market_regime_us)
-           VALUES ($1, 'pass', $2, $3, $4)""",
+           (agent_id, log_type, report_md, confidence, market_regime_kr, market_regime_us)
+           VALUES ($1, 'pass', $2, $3, $4, $5)""",
         (
-            agent_id, md,
+            agent_id, md, confidence,
             market_context.get("regime_kr"),
             market_context.get("regime_us"),
         ),
@@ -841,6 +967,7 @@ async def run_all_agents(price_spikes: dict | None = None):
         "equity_drop": macro_data.get("equity_drop", False),
         "gold_change_pct": macro_data.get("gold_change_pct", 0.0),
         "spx_change_pct": macro_data.get("spx_change_pct", 0.0),
+        "changes": macro_data.get("changes", {}),  # 5일/20일/3개월 변화율
         "date": today.isoformat(),
         "price_spikes": price_spikes or {},  # 급락 종목 {ticker: change_pct}
     }
@@ -853,7 +980,7 @@ async def run_all_agents(price_spikes: dict | None = None):
             decisions.append(result)
         except Exception as e:
             print(f"  [{agent.agent_id}] 오류: {e}")
-        await asyncio.sleep(10)  # Groq TPM 한도 대응 (에이전트 간 10초 대기)
+        await asyncio.sleep(30)  # Groq TPM 한도 대응 (에이전트 간 30초 대기)
 
     print(f"[{datetime.now().strftime('%H:%M:%S')}] 후처리 시작")
 

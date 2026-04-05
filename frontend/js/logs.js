@@ -78,6 +78,18 @@ function logTypeChip(logType) {
     return `<span class="text-xs px-2 py-0.5 rounded-full font-medium ${cls}">${label}</span>`;
 }
 
+// ── Confidence badge ───────────────────────────────────────────
+const CONFIDENCE_LABELS = {
+    high:   { label: '확신 높음', cls: 'text-success bg-success/10' },
+    medium: { label: '확신 중간', cls: 'text-yellow-400 bg-yellow-400/10' },
+    low:    { label: '확신 낮음', cls: 'text-gray-400 bg-gray-700/30' },
+};
+function confidenceBadge(confidence) {
+    if (!confidence) return '';
+    const cfg = CONFIDENCE_LABELS[confidence] || CONFIDENCE_LABELS['low'];
+    return `<span class="text-xs px-2 py-0.5 rounded-full font-medium ${cfg.cls}">${cfg.label}</span>`;
+}
+
 // ── Thesis validity badge ──────────────────────────────────────
 function thesisBadge(wasCorrect) {
     const key = wasCorrect === null || wasCorrect === undefined ? 'null' : String(wasCorrect);
@@ -93,6 +105,25 @@ function regimeBadge(market, regime) {
               : regime === '변동성급등' ? 'regime-vol'
               : 'regime-side';
     return `<span class="text-[9px] px-1.5 py-0.5 rounded-full font-bold ${cls}">${market} ${regime}</span>`;
+}
+
+// ── 토론 요약 블록 파싱 ───────────────────────────────────────
+function parseDebateSummary(reportMd) {
+    if (!reportMd) return null;
+    // "## 📋 요약" 섹션에서 항목 추출
+    const summaryMatch = reportMd.match(/##\s*📋\s*요약([\s\S]*?)(?=\n##\s|\n---|\n# |$)/);
+    if (!summaryMatch) return null;
+    const block = summaryMatch[1];
+    const extract = (label) => {
+        const m = block.match(new RegExp(`\\*\\*${label}\\*\\*[:\\s]*([^\\n]+)`));
+        return m ? m[1].replace(/\*\*/g, '').trim() : null;
+    };
+    return {
+        ticker:    extract('종목'),
+        sides:     extract('대립 구도'),
+        issue:     extract('핵심 쟁점'),
+        conclusion:extract('결론'),
+    };
 }
 
 // ── Render a single collapsible log card ──────────────────────
@@ -112,6 +143,20 @@ function renderLogCard(log, index) {
 
     const bodyId = `log-body-${++_logCardCounter}`;
 
+    // 토론 요약 블록 (debate 타입만)
+    let debateSummaryHtml = '';
+    if (log.log_type === 'debate' && log.report_md) {
+        const ds = parseDebateSummary(log.report_md);
+        if (ds) {
+            debateSummaryHtml = `
+        <div class="px-4 pb-3 grid grid-cols-1 gap-1 pointer-events-none">
+            ${ds.sides     ? `<div class="text-[10px]"><span class="text-gray-600 mr-1">대립:</span><span class="text-gray-300">${ds.sides}</span></div>` : ''}
+            ${ds.issue     ? `<div class="text-[10px]"><span class="text-gray-600 mr-1">쟁점:</span><span class="text-gray-400">${ds.issue}</span></div>` : ''}
+            ${ds.conclusion? `<div class="text-[10px]"><span class="text-warning/80 mr-1">결론:</span><span class="text-gray-300">${ds.conclusion}</span></div>` : ''}
+        </div>`;
+        }
+    }
+
     return `
     <div class="bg-card border border-gray-800 rounded-xl mb-2 overflow-hidden transition-all">
         <div class="flex items-center gap-2 px-4 py-3 cursor-pointer hover:bg-white/[.03] select-none"
@@ -121,12 +166,13 @@ function renderLogCard(log, index) {
             ${tickers}
             ${regimes}
             <span class="ml-auto flex items-center gap-2 shrink-0">
+                ${confidenceBadge(log.confidence)}
                 ${thesisBadge(log.thesis_valid)}
                 <span class="text-xs text-gray-600">${formatTs(log.created_at)}</span>
                 <span class="material-symbols-outlined text-gray-600 text-sm expand-icon">expand_more</span>
             </span>
         </div>
-        ${summary ? `<p class="px-4 pb-2 text-xs text-gray-500 truncate pointer-events-none">${summary}…</p>` : ''}
+        ${debateSummaryHtml || (summary ? `<p class="px-4 pb-2 text-xs text-gray-500 truncate pointer-events-none">${summary}…</p>` : '')}
         <div id="${bodyId}" class="log-body px-4 pb-4 border-t border-gray-800/60 pt-3 prose-report">
             <div class="text-xs text-gray-500 py-4 text-center">
                 <span class="material-symbols-outlined animate-spin text-base align-middle">progress_activity</span>

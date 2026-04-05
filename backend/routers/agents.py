@@ -60,6 +60,26 @@ async def list_agents():
             (a.agent_id,),
         )
         mdd_data = calc_mdd([dict(s) for s in all_snaps])
+
+        # 최신 행동 — buy > hold > pass > monitor 우선순위, monitor 제외 먼저 시도
+        latest_action = await fetchone(
+            """SELECT log_type, tickers, confidence, created_at
+               FROM investment_logs
+               WHERE agent_id = $1
+                 AND log_type IN ('buy', 'hold', 'pass')
+               ORDER BY created_at DESC LIMIT 1""",
+            (a.agent_id,),
+        )
+        # buy/hold/pass 없으면 monitor도 포함
+        if not latest_action:
+            latest_action = await fetchone(
+                """SELECT log_type, tickers, confidence, created_at
+                   FROM investment_logs
+                   WHERE agent_id = $1
+                   ORDER BY created_at DESC LIMIT 1""",
+                (a.agent_id,),
+            )
+
         result.append({
             "agent_id": a.agent_id,
             "name_kr": a.name_kr,
@@ -71,6 +91,10 @@ async def list_agents():
             "mdd": mdd_data["mdd"],
             "current_drawdown": mdd_data["current_drawdown"],
             "peak_return": mdd_data["peak"],
+            "today_action":     latest_action["log_type"]  if latest_action else None,
+            "today_ticker":     latest_action["tickers"]   if latest_action else None,
+            "today_confidence": latest_action["confidence"] if latest_action else None,
+            "today_action_at":  latest_action["created_at"].isoformat() if latest_action and latest_action["created_at"] else None,
         })
     return result
 
@@ -85,7 +109,7 @@ async def get_positions(agent_id: str):
                        ELSE NULL END AS pnl_pct
            FROM simulated_trades t
            LEFT JOIN company_info c ON t.ticker = c.ticker AND t.market = c.market
-           LEFT JOIN stock_scores s ON t.ticker = s.ticker
+           LEFT JOIN stock_scores s ON t.ticker = s.ticker AND s.market = t.market
                AND s.score_date = (SELECT MAX(score_date) FROM stock_scores)
            WHERE t.agent_id = $1 AND t.status != 'closed'
            ORDER BY t.trade_date DESC""",

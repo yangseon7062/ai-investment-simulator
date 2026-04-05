@@ -34,20 +34,16 @@ function applyChartDefaults() {
 const AGENT_COLORS = {
     macro:       '#7c6aff',
     strategist:  '#3b82f6',
-    analyst:     '#10b981',
     surfer:      '#f59e0b',
     explorer:    '#ec4899',
-    contrarian:  '#8b5cf6',
     bear:        '#ef4444',
 };
 
 const AGENT_NAMES_KR = {
     macro:       '매크로',
     strategist:  '전략가',
-    analyst:     '심사역',
     surfer:      '서퍼',
     explorer:    '미래탐색자',
-    contrarian:  '컨트라리안',
     bear:        '베어',
 };
 

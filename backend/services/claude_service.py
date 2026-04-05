@@ -160,6 +160,62 @@ def _build_market_warning_context(market_context: dict) -> str:
     return "\n## ⚡ 시장 경고 시그널 (즉시 반영)\n" + "\n".join(f"- {w}" for w in warnings) + "\n"
 
 
+def _build_macro_change_context(market_context: dict) -> str:
+    """
+    5일/20일/3개월 변화율을 LLM이 읽기 좋은 포맷으로 변환
+    macro/bear 에이전트에만 주입 (show_macro_context=True인 에이전트)
+    """
+    changes = market_context.get("changes", {})
+    if not changes:
+        return ""
+
+    lines = []
+
+    # VIX 변화
+    vix_now = market_context.get("vix")
+    vix_parts = []
+    for suffix, label in [("5d", "5일"), ("20d", "20일"), ("3m", "3개월")]:
+        v = changes.get(f"vix_{suffix}")
+        if v is not None:
+            sign = "+" if v >= 0 else ""
+            vix_parts.append(f"{label} {sign}{v:.1f}pt")
+    if vix_parts and vix_now:
+        lines.append(f"VIX: 현재 {vix_now:.1f} | 변화: {' / '.join(vix_parts)}")
+
+    # 환율 변화
+    krw_parts = []
+    for suffix, label in [("5d", "5일"), ("20d", "20일"), ("3m", "3개월")]:
+        v = changes.get(f"krw_{suffix}_pct")
+        if v is not None:
+            sign = "+" if v >= 0 else ""
+            krw_parts.append(f"{label} {sign}{v:.2f}%")
+    if krw_parts:
+        lines.append(f"원달러 환율: {' / '.join(krw_parts)}")
+
+    # 금리·스프레드 변화
+    fred = market_context.get("fred", {}) or {}
+    rate_rows = [
+        ("10y_yield", "미국 10년물", fred.get("10Y_YIELD")),
+        ("hy_spread", "HY 스프레드",  fred.get("HY_SPREAD")),
+        ("ig_spread", "IG 스프레드",  fred.get("IG_SPREAD")),
+    ]
+    for key, label, current in rate_rows:
+        parts = []
+        for suffix, slabel in [("5d", "5일"), ("20d", "20일"), ("3m", "3개월")]:
+            v = changes.get(f"{key}_{suffix}")
+            if v is not None:
+                sign = "+" if v >= 0 else ""
+                parts.append(f"{slabel} {sign}{v:.3f}%p")
+        if parts:
+            cur_str = f"현재 {current:.2f}% | " if current is not None else ""
+            lines.append(f"{label}: {cur_str}변화: {' / '.join(parts)}")
+
+    if not lines:
+        return ""
+
+    return "\n## 📊 거시 지표 변화율 (방향성 판단용)\n" + "\n".join(f"- {l}" for l in lines) + "\n"
+
+
 # ── 시장 국면 감지 ─────────────────────────────────────────────────
 
 async def detect_market_regime(macro_data: dict, sector_data: dict, market: str) -> dict:
@@ -308,12 +364,75 @@ async def generate_agent_decision(
         forbidden_lines = "\n".join(f"  - {t}" for t in forbidden_topics)
         forbidden_section = f"\n❌ 절대 언급·사용 금지 항목 (이 에이전트 전략과 무관):\n{forbidden_lines}\n"
 
+    # 미래탐색자 전용: 뉴스 증가율 해석 지침
+    explorer_news_trend_section = ""
+    if agent_config.agent_id == "explorer":
+        explorer_news_trend_section = (
+            "\n📰 뉴스 증가율 해석 원칙 (미래탐색자 전용):\n"
+            "  - 각 후보에 news_trend 필드가 있으면: 최근 7일 vs 이전 7일 언급 건수 변화율이다.\n"
+            "  - news_trend.available=False → 뉴스 증가율 데이터 없음. 언급·사용 금지.\n"
+            "  - growth_pct > 50% → 뉴스 모멘텀 상승 중 (성장 스토리 초기 신호 가능성)\n"
+            "  - growth_pct < -30% → 뉴스 모멘텀 감소 (스토리 소멸 경계)\n"
+            "  - 뉴스 증가율은 단독 매수 근거가 아니다. 매출·마진 추세와 함께 확인할 것.\n"
+        )
+
+    # 서퍼 전용: 뉴스 취급 지침
+    news_usage_section = ""
+    if agent_config.agent_id == "surfer":
+        news_usage_section = (
+            "\n📰 뉴스 취급 원칙 (서퍼 전용):\n"
+            "  - 뉴스는 판단 근거가 아니라 보조 확인 수단이다.\n"
+            "  - 매수 근거는 반드시 가격·거래량·기술 지표에서만 도출할 것.\n"
+            "  - 뉴스가 좋아도 가격·거래량 신호가 없으면 진입 금지.\n"
+            "  - 뉴스가 나빠도 가격·거래량 신호가 강하면 가격이 진실이다.\n"
+        )
+
+    # 전략가 전용: 데이터 충분성 기반 판단 규칙
+    strategist_data_rules = ""
+    if agent_config.agent_id == "strategist":
+        strategist_data_rules = """
+📊 데이터 충분성 판단 규칙 (전략가 필수 준수):
+
+각 후보 종목에는 아래 플래그가 있다:
+  - has_pbr_history: PBR 시계열 4분기 이상 존재 여부
+  - has_roic_trend: ROIC 시계열 4분기 이상 존재 여부
+  - has_sector_per: 업종 평균 PER/PBR 데이터 존재 여부
+  - data_quarters: 보유 분기 수
+
+⛔ 데이터 부족 시 절대 금지 표현:
+  - has_pbr_history=False → "역사적 상단/하단", "PBR 밴드" 표현 금지
+  - has_roic_trend=False → "ROIC 하락 조짐", "ROIC 추세" 표현 금지
+  - has_sector_per=False → "업종 대비 고평가/저평가", "업종 평균 이하" 표현 금지
+
+✅ 데이터 부족 시 대체 기준 (절대 기준 fallback):
+  - PBR 역사 없음 → PBR 1.5 이하: 저평가 / 3.0 이상: 고평가 기준으로 판단
+  - PER 업종 없음 → PER 15 이하: 저평가 / 25 이상: 고평가 기준으로 판단
+  - ROIC 추세 없음 → 현재 ROIC 8% 이상이면 양호, 이하면 추가 검증 필요
+
+📋 리포트 작성 시 반드시 명시:
+  - 역사 데이터 사용 시: "(역사 비교: {data_quarters}분기 시계열 기반)"
+  - 절대 기준 사용 시: "(절대 기준 사용: 역사 비교 데이터 부족)"
+  - 업종 데이터 사용 시: "(업종 중앙값 {sector_median_per} 대비)"
+  - 업종 데이터 없을 시: "(업종 비교 불가: 절대 기준 사용)"
+
+📊 PBR 밴드 해석 규칙 (전략가 필수):
+각 후보에는 pbr_band 필드가 있을 수 있다:
+  - pbr_band_available=False → "PBR 역사 밴드 부족 (데이터 {data_quarters}분기 미만)" 명시, 밴드 기반 판단 금지
+  - pbr_band_available=True → pbr_band.percentile 기준으로 해석:
+      * percentile ≤ 20: 역사적 저점 구간 → 진입 우호적
+      * percentile ≥ 80: 역사적 고점 구간 → 진입 위험, 원칙적 금지
+      * 20 < percentile < 80: 중간 구간 → ROIC·FCF 등 질적 요소로 판단
+  - pbr_band_caution=True → "⚠️ 금융/보험/리츠 섹터 — PBR 해석 시 업종 자본 구조 특성 고려 필수" 명시
+  - PBR 밴드는 보조지표: ROIC → gross_margin → FCF → 부채비율 확인 후 마지막에 참고
+  - 리포트에 pbr_band.percentile이 있으면: "(역사 밴드 하위 {percentile}% 구간, {quarters}분기 기준)" 형식으로 명시
+"""
+
     system = f"""당신은 '{agent_config.name_kr}'라는 AI 투자 에이전트입니다.
 페르소나: {agent_config.persona}
 전략: {agent_config.strategy}
 투자 시간축: {agent_config.time_horizon}
 리포트 스타일: {agent_config.report_style}
-{macro_lens}{key_data_section}{forbidden_section}
+{macro_lens}{key_data_section}{forbidden_section}{explorer_news_trend_section}{news_usage_section}{strategist_data_rules}
 
 모든 판단은 한국어로 작성하세요.
 전문 용어 사용 시 반드시 괄호로 설명을 추가하세요. (예: PBR(주가순자산비율))
@@ -330,6 +449,11 @@ async def generate_agent_decision(
 
     # Plan B: 모든 에이전트 — 임계값 초과 시 동적 경고 주입
     warning_context = _build_market_warning_context(market_context)
+
+    # 거시 지표 변화율 (macro/bear/strategist 전용 — show_macro_context=True인 에이전트)
+    macro_change_section = ""
+    if agent_config.show_macro_context:
+        macro_change_section = _build_macro_change_context(market_context)
 
     # 내러티브 섹션 (Task 5: 거시 뉴스 시그널 강조)
     narrative_section = ""
@@ -402,18 +526,24 @@ async def generate_agent_decision(
             "thesis": thesis,
         })
 
+    # prices_60d는 raw 배열이라 LLM이 직접 해석 불가 → 제거
+    def _clean_candidate(c: dict) -> dict:
+        return {k: v for k, v in c.items() if k != "prices_60d"}
+
+    cleaned_candidates = [_clean_candidate(c) for c in candidate_stocks[:20]]
+
     prompt = f"""
 ## 현재 시장 상황 (거시 수치)
 국면: KR={market_context.get('regime_kr')} / US={market_context.get('regime_us')}
 VIX: {market_context.get('vix')} | 공포탐욕지수: {market_context.get('fear_greed')}
 FRED 금리: {json.dumps(market_context.get('fred', {}), ensure_ascii=False)}
 gold 변화: {market_context.get('gold_change_pct', 0):+.1f}% | S&P500 변화: {market_context.get('spx_change_pct', 0):+.1f}%
-{extra_section}{narrative_section}{warning_context}{loss_section}
+{macro_change_section}{extra_section}{narrative_section}{warning_context}{loss_section}
 ## 보유 포지션 ({len(current_positions)}개) — 현재 수익률 포함
 {json.dumps(pos_summary, ensure_ascii=False, indent=2)}
 
 ## 후보 종목 (스코어 상위 + 거래량 급등 포함)
-{json.dumps(candidate_stocks[:20], ensure_ascii=False, indent=2)}
+{json.dumps(cleaned_candidates, ensure_ascii=False, indent=2)}
 
 ## 최근 30일 내 판단 기록
 {json.dumps(recent_logs[-10:], ensure_ascii=False, indent=2)}
@@ -603,17 +733,17 @@ async def generate_postmortem(
 # ── 주간 라운드테이블 ──────────────────────────────────────────────
 
 async def generate_roundtable(agents_summaries: list[dict]) -> str:
-    """7개 에이전트 주간 요약 → 라운드테이블 토론 리포트"""
-    system = "당신은 7명의 AI 투자자가 참여하는 주간 투자 토론의 진행자입니다."
+    """5개 에이전트 주간 요약 → 라운드테이블 토론 리포트"""
+    system = "당신은 5명의 AI 투자자가 참여하는 주간 투자 토론의 진행자입니다."
     prompt = f"""
-다음은 이번 주 7개 AI 에이전트의 투자 요약입니다:
+다음은 이번 주 5개 AI 에이전트(매크로·전략가·서퍼·미래탐색자·베어)의 투자 요약입니다:
 
 {json.dumps(agents_summaries, ensure_ascii=False, indent=2)}
 
 이를 바탕으로 주간 라운드테이블 토론 리포트를 작성하세요:
 1. 각 에이전트의 이번 주 핵심 판단 요약
 2. 에이전트 간 의견 충돌·합의 분석 (특히 R 상승 대응 방식의 차이)
-3. 다음 주 시장 전망 (7개 시각 통합, R-G 균형 관점 포함)
+3. 다음 주 시장 전망 (5개 시각 통합, R-G 균형 관점 포함)
 
 마크다운 형식. 한국어. 초보자도 읽기 쉽게.
 """
@@ -630,7 +760,7 @@ async def generate_debate(
     bear_agent: str,
     bear_report: str,
 ) -> str:
-    """같은 종목 반대 포지션 → 토론 리포트"""
+    """같은 종목 반대 포지션 → 토론 리포트 (요약 블록 포함)"""
     system = "당신은 두 AI 투자자의 상반된 의견을 분석하는 중립적 분석가입니다."
     prompt = f"""
 종목: {name} ({ticker})
@@ -643,7 +773,19 @@ async def generate_debate(
 
 ---
 
-두 의견을 분석하고 토론 리포트를 작성하세요:
+두 의견을 분석하고 아래 형식으로 토론 리포트를 작성하세요.
+
+**반드시 리포트 맨 앞에 아래 요약 블록을 먼저 작성하고, 그 다음 상세 분석을 이어서 작성하세요:**
+
+## 📋 요약
+- **종목**: {name} ({ticker})
+- **대립 구도**: {bull_agent}(매수) vs {bear_agent}(매도/회의)
+- **핵심 쟁점**: (한 줄 — 무엇이 핵심 의견 차이인지)
+- **결론**: (한 줄 — 어떤 조건이 되면 누가 맞을지)
+
+---
+
+## 상세 분석
 1. 핵심 논거 비교 (성장(G) vs 할인율(R) 관점 포함)
 2. 각각의 설득력 평가
 3. 어떤 조건이 충족되면 누가 맞을지 (금리 방향, 이익 반응 등)
@@ -656,13 +798,13 @@ async def generate_debate(
 # ── 오늘의 한 줄 요약 ──────────────────────────────────────────────
 
 async def generate_daily_summary(agents_decisions: list[dict]) -> str:
-    """7개 에이전트 오늘 판단 → 한 줄 요약"""
+    """5개 에이전트 오늘 판단 → 한 줄 요약"""
     system = "한 문장으로 오늘 AI 투자자들의 전체 분위기를 요약하세요."
     prompt = f"""
-오늘 7개 AI 에이전트의 투자 결정:
+오늘 5개 AI 에이전트(매크로·전략가·서퍼·미래탐색자·베어)의 투자 결정:
 {json.dumps(agents_decisions, ensure_ascii=False, indent=2)}
 
 위 내용을 한 문장(40자 이내)으로 요약하세요. 한국어.
-예: "금리 불확실성 속 반도체 분할매수 우세, 베어·컨트라리안은 현금 대기."
+예: "금리 불확실성 속 반도체 분할매수 우세, 베어는 현금 대기."
 """
     return await _call_claude(prompt, system, "daily_summary")

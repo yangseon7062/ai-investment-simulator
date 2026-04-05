@@ -61,7 +61,7 @@
       </div>
       <div>
         <h1 class="text-base font-bold text-[#7c6aff] tracking-tight">AI 투자 시뮬레이터</h1>
-        <p class="text-xs text-gray-500">7 Agents · Claude + Groq</p>
+        <p class="text-xs text-gray-500">5 Agents · Groq</p>
       </div>
     </div>
 
@@ -187,6 +187,9 @@
         </div>
       </div>
 
+      <!-- 섹터 집중도 경고 -->
+      <div id="sector-concentration-warning" class="hidden"></div>
+
       <!-- Portfolio Table (Stitch 원본 구조) -->
       <section class="bg-card rounded-2xl border border-[#2a2f3e] overflow-hidden">
         <div class="p-6 border-b border-[#2a2f3e] flex items-center justify-between">
@@ -255,10 +258,8 @@
           <option value="">전체 에이전트</option>
           <option value="macro">매크로</option>
           <option value="strategist">전략가</option>
-          <option value="analyst">심사역</option>
           <option value="surfer">서퍼</option>
           <option value="explorer">미래탐색자</option>
-          <option value="contrarian">컨트라리안</option>
           <option value="bear">베어</option>
         </select>
         <select id="log-type-filter" onchange="loadLogs()"

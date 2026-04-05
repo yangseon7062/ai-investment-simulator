@@ -14,11 +14,12 @@ async def run_roundtable():
     async with get_db() as conn:
         weekly_stats = [dict(r) for r in await conn.fetch(
             """SELECT agent_id,
-                      SUM(CASE WHEN log_type = 'buy' THEN 1 ELSE 0 END) as buys,
+                      SUM(CASE WHEN log_type = 'buy'  THEN 1 ELSE 0 END) as buys,
                       SUM(CASE WHEN log_type = 'sell' THEN 1 ELSE 0 END) as sells,
-                      SUM(CASE WHEN log_type = 'pass' THEN 1 ELSE 0 END) as passes
+                      SUM(CASE WHEN log_type = 'pass' THEN 1 ELSE 0 END) as passes,
+                      SUM(CASE WHEN log_type = 'hold' THEN 1 ELSE 0 END) as holds
                FROM investment_logs
-               WHERE created_at >= $1
+               WHERE created_at >= $1 AND agent_id != 'system'
                GROUP BY agent_id""",
             week_start,
         )]
@@ -31,13 +32,22 @@ async def run_roundtable():
                WHERE t.agent_id = 'strategist' AND t.status != 'closed'""",
         )]
 
+        # 이번 주 사후검증 결과
+        postmortems = [dict(r) for r in await conn.fetch(
+            """SELECT agent_id, ticker, pnl_pct, was_correct
+               FROM postmortems
+               WHERE created_at >= $1""",
+            week_start,
+        )]
+
     summaries = []
     for stat in weekly_stats:
         summaries.append({
             "agent_id": stat["agent_id"],
-            "weekly_buys": stat["buys"],
+            "weekly_buys":  stat["buys"],
             "weekly_sells": stat["sells"],
             "weekly_passes": stat["passes"],
+            "weekly_holds": stat["holds"],
         })
 
     if strategist_positions:
@@ -45,6 +55,13 @@ async def run_roundtable():
             "agent_id": "strategist_positions",
             "positions": strategist_positions,
             "note": "전략가 주간 포지션 점검",
+        })
+
+    if postmortems:
+        summaries.append({
+            "agent_id": "postmortems_summary",
+            "results": postmortems,
+            "note": "이번 주 종료 포지션 손익",
         })
 
     report = await generate_roundtable(summaries)

@@ -8,6 +8,7 @@ from datetime import date
 from backend.services.data_fetcher import (
     get_vix, get_fear_greed, get_fred_indicators,
     get_sector_etf_returns, get_gold_equity_signal,
+    get_macro_change_rates,
 )
 from backend.services.claude_service import detect_market_regime, generate_market_narrative
 from backend.database import execute as db_execute, fetchone, get_db
@@ -23,12 +24,13 @@ async def run_regime_detection() -> dict:
         return existing
 
     loop = asyncio.get_event_loop()
-    vix, fear_greed, fred_data, sector_etfs, gold_signal = await asyncio.gather(
+    vix, fear_greed, fred_data, sector_etfs, gold_signal, macro_changes = await asyncio.gather(
         get_vix(),
         get_fear_greed(),
         loop.run_in_executor(None, get_fred_indicators),
         get_sector_etf_returns(),
         get_gold_equity_signal(),
+        get_macro_change_rates(),
     )
 
     macro_data = {
@@ -39,6 +41,7 @@ async def run_regime_detection() -> dict:
         "equity_drop": gold_signal.get("equity_drop", False),
         "gold_change_pct": gold_signal.get("gold_change_pct", 0.0),
         "spx_change_pct": gold_signal.get("spx_change_pct", 0.0),
+        "changes": macro_changes,  # 5일/20일/3개월 변화율
     }
 
     kr_regime_result, us_regime_result = await asyncio.gather(

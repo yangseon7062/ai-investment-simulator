@@ -146,38 +146,20 @@ async def calc_fundamental_score(ticker: str, market: str) -> float:
     return round(min(100.0, max(0.0, score)), 2)
 
 
-# ── 감성 스코어 ────────────────────────────────────────────────────
-
-def calc_sentiment_score_from_raw(raw_score: float) -> float:
-    """
-    종토방 raw 감성(-1~+1) → 0~100 스코어
-    """
-    return round((raw_score + 1) / 2 * 100, 2)
-
-
 # ── 복합 스코어 ────────────────────────────────────────────────────
 
 def calc_composite_score(
     technical: float,
     fundamental: float,
-    sentiment: float,
     weights: dict = None,
-    has_sentiment: bool = True,
 ) -> float:
+    """기술적 + 재무 스코어 가중 합산 (감성 스코어 미사용)"""
     if weights is None:
-        weights = {"technical": 0.4, "fundamental": 0.4, "sentiment": 0.2}
-    if not has_sentiment:
-        # 감성 데이터 없으면 기술+재무 비중으로 재분배
-        total = weights["technical"] + weights["fundamental"]
-        tw = weights["technical"] / total
-        fw = weights["fundamental"] / total
-        return round(technical * tw + fundamental * fw, 2)
-    return round(
-        technical * weights["technical"]
-        + fundamental * weights["fundamental"]
-        + sentiment * weights["sentiment"],
-        2,
-    )
+        weights = {"technical": 0.5, "fundamental": 0.5}
+    total = weights.get("technical", 0.5) + weights.get("fundamental", 0.5)
+    tw = weights.get("technical", 0.5) / total
+    fw = weights.get("fundamental", 0.5) / total
+    return round(technical * tw + fundamental * fw, 2)
 
 
 # ── 스크리닝 풀 로드 ────────────────────────────────────────────────
@@ -311,11 +293,11 @@ async def run_scoring_engine():
 
         tech = calc_technical_score(prices, volumes)
         fund = await calc_fundamental_score(ticker, "KR")
-        composite = calc_composite_score(tech, fund, 50.0, has_sentiment=False)
+        composite = calc_composite_score(tech, fund)
 
         records.append((
             today_date, ticker, "KR",
-            tech, fund, 50.0, composite,
+            tech, fund, 0.0, composite,
             price_data.get("price"),
         ))
 
@@ -332,11 +314,11 @@ async def run_scoring_engine():
 
         tech = calc_technical_score(prices, volumes)
         fund = await calc_fundamental_score(ticker, "US")
-        composite = calc_composite_score(tech, fund, 50.0, has_sentiment=False)
+        composite = calc_composite_score(tech, fund)
 
         records.append((
             today_date, ticker, "US",
-            tech, fund, 50.0, composite,
+            tech, fund, 0.0, composite,
             price_data.get("price"),
         ))
 
@@ -360,23 +342,81 @@ async def run_scoring_engine():
     return len(records)
 
 
+# ── 업종 평균 밸류에이션 계산 (전략가용) ──────────────────────────────
+
+async def calculate_sector_valuations():
+    """financials_cache 최신 분기 기준으로 업종별 PER/PBR 중앙값 계산 → sector_valuations 저장
+    평균 대신 중앙값 사용 (이상치 왜곡 방지)
+    """
+    today = date.today()
+    async with get_db() as conn:
+        rows = await conn.fetch(
+            """SELECT DISTINCT ON (f.ticker, f.market)
+                      f.ticker, f.market, f.per, f.pbr, c.sector
+               FROM financials_cache f
+               LEFT JOIN company_info c ON f.ticker = c.ticker AND f.market = c.market
+               WHERE f.per IS NOT NULL OR f.pbr IS NOT NULL
+               ORDER BY f.ticker, f.market, f.fiscal_quarter DESC"""
+        )
+
+    from collections import defaultdict
+    sector_data: dict = defaultdict(lambda: {"per": [], "pbr": []})
+    for r in rows:
+        key = (r["market"], r["sector"] or "기타")
+        if r["per"] and r["per"] > 0:
+            sector_data[key]["per"].append(r["per"])
+        if r["pbr"] and r["pbr"] > 0:
+            sector_data[key]["pbr"].append(r["pbr"])
+
+    if not sector_data:
+        print("  sector_valuations: 데이터 없음 (financials_cache 적재 전)")
+        return
+
+    records = []
+    for (market, sector), vals in sector_data.items():
+        per_list = sorted(vals["per"])
+        pbr_list = sorted(vals["pbr"])
+
+        def median(lst):
+            if not lst:
+                return None
+            n = len(lst)
+            return lst[n // 2] if n % 2 else (lst[n // 2 - 1] + lst[n // 2]) / 2
+
+        records.append((
+            today, market, sector,
+            round(sum(per_list) / len(per_list), 2) if per_list else None,
+            round(median(per_list), 2) if per_list else None,
+            round(sum(pbr_list) / len(pbr_list), 2) if pbr_list else None,
+            round(median(pbr_list), 2) if pbr_list else None,
+            len(per_list) or len(pbr_list),
+        ))
+
+    async with get_db() as conn:
+        await conn.executemany(
+            """INSERT INTO sector_valuations
+               (calc_date, market, sector, avg_per, median_per, avg_pbr, median_pbr, stock_count)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+               ON CONFLICT (calc_date, market, sector) DO UPDATE SET
+                 avg_per = EXCLUDED.avg_per, median_per = EXCLUDED.median_per,
+                 avg_pbr = EXCLUDED.avg_pbr, median_pbr = EXCLUDED.median_pbr,
+                 stock_count = EXCLUDED.stock_count""",
+            records,
+        )
+    print(f"  sector_valuations: {len(records)}개 업종 계산 완료")
+
+
 # ── 에이전트별 가중 스코어 조회 ────────────────────────────────────
 
-AGENT_WEIGHTS = {
-    "macro":        {"technical": 0.4, "fundamental": 0.6, "sentiment": 0.0},
-    "strategist":   {"technical": 0.2, "fundamental": 0.8, "sentiment": 0.0},
-    "analyst":      {"technical": 0.1, "fundamental": 0.9, "sentiment": 0.0},
-    "surfer":       {"technical": 0.9, "fundamental": 0.1, "sentiment": 0.0},
-    "explorer":     {"technical": 0.3, "fundamental": 0.7, "sentiment": 0.0},
-    "contrarian":   {"technical": 0.3, "fundamental": 0.7, "sentiment": 0.0},
-    "bear":         {"technical": 0.6, "fundamental": 0.4, "sentiment": 0.0},
-}
-
-
 async def get_top_stocks(agent_id: str, market: str, top_n: int = 30) -> list[dict]:
-    """에이전트별 가중치 적용 → 상위 종목 반환 (현재가 포함)"""
+    """에이전트별 가중치 적용 → 상위 종목 반환 (현재가 포함)
+    가중치는 definitions.py AgentConfig.score_weights 단일 관리 (중복 정의 제거)
+    """
+    from backend.agents.definitions import AGENTS as AGENT_DEFS
+    agent_def = AGENT_DEFS.get(agent_id)
+    weights = agent_def.score_weights if agent_def and agent_def.score_weights \
+        else {"technical": 0.4, "fundamental": 0.4, "sentiment": 0.2}
     today = date.today()
-    weights = AGENT_WEIGHTS.get(agent_id, {"technical": 0.4, "fundamental": 0.4, "sentiment": 0.2})
 
     async with get_db() as conn:
         rows = await conn.fetch(
@@ -392,7 +432,7 @@ async def get_top_stocks(agent_id: str, market: str, top_n: int = 30) -> list[di
     for row in rows:
         tech = row["technical_score"] or 50.0
         fund = row["fundamental_score"] or 50.0
-        weighted = calc_composite_score(tech, fund, 50.0, weights, has_sentiment=False)
+        weighted = calc_composite_score(tech, fund, weights)
         results.append({
             "ticker": row["ticker"],
             "name": row["name"],

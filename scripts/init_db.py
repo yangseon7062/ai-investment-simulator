@@ -185,7 +185,36 @@ SCHEMA_SQL = [
         PRIMARY KEY (ticker, market)
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS news_articles (
+        id              SERIAL PRIMARY KEY,
+        ticker          TEXT,
+        market          TEXT,
+        title           TEXT NOT NULL,
+        source          TEXT,
+        published_at    TIMESTAMPTZ,
+        created_at      TIMESTAMPTZ DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS sector_valuations (
+        id              SERIAL PRIMARY KEY,
+        calc_date       DATE NOT NULL,
+        market          TEXT NOT NULL CHECK(market IN ('KR','US')),
+        sector          TEXT NOT NULL,
+        avg_per         REAL,
+        median_per      REAL,
+        avg_pbr         REAL,
+        median_pbr      REAL,
+        stock_count     INTEGER,
+        created_at      TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(calc_date, market, sector)
+    )
+    """,
     # 인덱스
+    "CREATE INDEX IF NOT EXISTS idx_sector_val_date ON sector_valuations(calc_date)",
+    "CREATE INDEX IF NOT EXISTS idx_news_ticker ON news_articles(ticker)",
+    "CREATE INDEX IF NOT EXISTS idx_news_created ON news_articles(created_at)",
     "CREATE INDEX IF NOT EXISTS idx_trades_agent ON simulated_trades(agent_id)",
     "CREATE INDEX IF NOT EXISTS idx_trades_ticker ON simulated_trades(ticker)",
     "CREATE INDEX IF NOT EXISTS idx_trades_status ON simulated_trades(status)",
@@ -197,7 +226,7 @@ SCHEMA_SQL = [
     "CREATE INDEX IF NOT EXISTS idx_snapshots_agent ON portfolio_snapshots(agent_id)",
 ]
 
-AGENTS = ["macro", "strategist", "analyst", "surfer", "explorer", "contrarian", "bear"]
+AGENTS = ["macro", "strategist", "surfer", "explorer", "bear"]
 
 US_STOCKS = [
     ("AAPL", "Apple Inc.", "Technology"),
@@ -251,7 +280,34 @@ MIGRATIONS = [
     "ALTER TABLE financials_cache ADD COLUMN IF NOT EXISTS gross_margin REAL",
     "ALTER TABLE financials_cache ADD COLUMN IF NOT EXISTS fcf REAL",
     "ALTER TABLE financials_cache ADD COLUMN IF NOT EXISTS debt_ratio REAL",
-    # investment_logs hold 타입 (CHECK 제약 없으면 자동 허용, 있으면 수정 필요)
+    "ALTER TABLE investment_logs ADD COLUMN IF NOT EXISTS confidence TEXT",
+    # 에이전트 7→5 (analyst, contrarian 제거)
+    "DELETE FROM agent_portfolios WHERE agent_id IN ('analyst', 'contrarian')",
+    # news_articles 테이블 (뉴스 증가율 인프라)
+    """CREATE TABLE IF NOT EXISTS news_articles (
+        id              SERIAL PRIMARY KEY,
+        ticker          TEXT,
+        market          TEXT,
+        title           TEXT NOT NULL,
+        source          TEXT,
+        published_at    TIMESTAMPTZ,
+        created_at      TIMESTAMPTZ DEFAULT NOW()
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_news_ticker ON news_articles(ticker)",
+    "CREATE INDEX IF NOT EXISTS idx_news_created ON news_articles(created_at)",
+    # sector_valuations 테이블 (업종 평균 PER/PBR — 전략가용)
+    """CREATE TABLE IF NOT EXISTS sector_valuations (
+        id SERIAL PRIMARY KEY,
+        calc_date DATE NOT NULL,
+        market TEXT NOT NULL,
+        sector TEXT NOT NULL,
+        avg_per REAL, median_per REAL,
+        avg_pbr REAL, median_pbr REAL,
+        stock_count INTEGER,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(calc_date, market, sector)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_sector_val_date ON sector_valuations(calc_date)",
 ]
 
 
@@ -268,13 +324,15 @@ async def init_db():
             except Exception as e:
                 print(f"  마이그레이션 스킵 (이미 적용됨): {e}")
 
-        print("에이전트 포트폴리오 초기화 (1억원)...")
+        # agent_portfolios: 자본금 개념 미사용 (수익률 추적 방식으로 전환)
+        # 테이블은 스키마 호환성 유지를 위해 남겨두되 초기화 불필요
+        print("에이전트 포트폴리오 행 생성 (cash_krw=0, 자본금 미사용)...")
         for agent_id in AGENTS:
             await conn.execute(
                 """INSERT INTO agent_portfolios (agent_id, cash_krw)
-                   VALUES ($1, $2)
+                   VALUES ($1, 0)
                    ON CONFLICT (agent_id) DO NOTHING""",
-                agent_id, 100_000_000.0,
+                agent_id,
             )
 
     print(f"DB 초기화 완료")

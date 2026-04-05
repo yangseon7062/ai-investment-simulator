@@ -108,12 +108,13 @@ async function loadMain() {
     '<span class="inline-flex items-center gap-2"><span class="material-symbols-outlined animate-spin text-lg align-middle">progress_activity</span>서버 응답 대기 중…</span>';
   document.getElementById('banner-body').textContent = '(첫 로드 시 최대 30초 소요될 수 있습니다)';
 
-  const [summary, portfolio, conflicts, agentsList, consensus] = await Promise.all([
+  const [summary, portfolio, conflicts, agentsList, consensus, sectorWarnings] = await Promise.all([
     apiFetch('/api/dashboard/summary').catch(() => ({})),
     apiFetch('/api/dashboard/portfolio').catch(() => []),
     apiFetch('/api/dashboard/conflicts').catch(() => []),
     apiFetch('/api/agents/').catch(() => []),
     apiFetch('/api/dashboard/consensus').catch(() => []),
+    apiFetch('/api/dashboard/sector-concentration').catch(() => []),
   ]);
 
   const snap = summary.snapshot || {};
@@ -142,6 +143,9 @@ async function loadMain() {
 
   // Portfolio table
   renderUnifiedPortfolio(portfolio);
+
+  // 섹터 집중도 경고
+  renderSectorConcentrationWarning(sectorWarnings);
 
   // 중복 추천 섹션
   renderConsensus(consensus);
@@ -172,6 +176,14 @@ function renderRegimeBadges(snap) {
   el.innerHTML = badges.join('');
 }
 
+// 최신 행동 표시용 설정
+const ACTION_LABELS = {
+  buy:  { label: 'BUY',  cls: 'text-success bg-success/10' },
+  hold: { label: 'HOLD', cls: 'text-yellow-400 bg-yellow-400/10' },
+  pass: { label: 'PASS', cls: 'text-gray-400 bg-gray-700/30' },
+  monitor: { label: 'MON', cls: 'text-gray-500 bg-gray-800/50' },
+};
+
 function renderAgentCards(agents) {
   const el = document.getElementById('agent-cards');
   if (!el) return;
@@ -184,22 +196,52 @@ function renderAgentCards(agents) {
   const map = {};
   agents.forEach(a => { map[a.agent_id] = a; });
 
-  // Stitch 원본 카드 스타일 그대로
   el.innerHTML = AGENTS.map(agent => {
     const a = map[agent.id] || {};
     const ret = a.total_return || 0;
     const sign = ret >= 0 ? '+' : '';
 
-    // 베어: 손실이 정상일 수 있음 — 색상 반전 + 설명 레이블
+    // 베어: 손실이 정상일 수 있음 — 색상 반전
     const isBear = agent.id === 'bear';
     const retColor = isBear
-      ? (ret >= 0 ? 'text-success' : 'text-gray-400')  // 베어 손실은 회색(정상)
+      ? (ret >= 0 ? 'text-success' : 'text-gray-400')
       : (ret > 0 ? 'text-success' : ret < 0 ? 'text-danger' : 'text-warning');
-    const bearNote = isBear && ret < 0 ? '<span class="text-[9px] text-gray-500 ml-1">(상승장 정상)</span>' : '';
+
+    // 베어 상태 설명
+    let bearNote = '';
+    if (isBear) {
+      if (ret < 0) bearNote = '<span class="text-[9px] text-gray-500 ml-1">(상승장 정상)</span>';
+      else if (!a.today_action || a.today_action === 'pass') bearNote = '<span class="text-[9px] text-gray-500 ml-1">(조건 미충족)</span>';
+    }
 
     const daily = a.daily_return || 0;
     const dailySign = daily >= 0 ? '+' : '';
     const dailyColor = daily > 0 ? 'text-success' : daily < 0 ? 'text-danger' : 'text-gray-600';
+
+    // MDD — 항상 표시 (0이면 —)
+    const mdd = a.mdd || 0;
+    const mddHtml = mdd < 0
+      ? `<span class="${mdd < -5 ? 'text-danger/80' : 'text-gray-500'}">MDD ${mdd.toFixed(1)}%</span>`
+      : `<span class="text-gray-700">MDD —</span>`;
+
+    // 최신 행동 섹션
+    let actionHtml = '';
+    if (a.today_action) {
+      const cfg = ACTION_LABELS[a.today_action] || ACTION_LABELS['pass'];
+      const ticker = a.today_ticker ? `<span class="font-mono text-primary/80 ml-1">${a.today_ticker}</span>` : '';
+      const confBadge = a.today_confidence ? confidenceBadge(a.today_confidence) : '';
+      const dateStr = a.today_action_at ? formatTs(a.today_action_at) : '';
+      actionHtml = `
+      <div class="mt-2 pt-2 border-t border-[#2a2f3e]">
+        <div class="flex items-center gap-1 flex-wrap">
+          <span class="text-[10px] px-1.5 py-0.5 rounded font-bold ${cfg.cls}">${cfg.label}</span>
+          ${ticker}
+          ${confBadge}
+          <span class="text-[9px] text-gray-600 ml-auto">${dateStr}</span>
+        </div>
+      </div>`;
+    }
+
     return `
     <div class="bg-card p-4 rounded-xl border border-[#2a2f3e] hover:border-primary/50 transition-all group cursor-pointer"
          onclick="openAgentDetail('${agent.id}')">
@@ -216,7 +258,8 @@ function renderAgentCards(agents) {
         <span class="text-gray-600">${(a.open_positions || 0)}종목</span>
         <span class="${dailyColor}">일간 ${dailySign}${daily.toFixed(2)}%</span>
       </div>
-      ${(a.mdd||0) < -3 ? `<div class="mt-1 text-[10px] text-danger/80">MDD ${(a.mdd||0).toFixed(1)}%</div>` : ''}
+      <div class="mt-1 text-[10px]">${mddHtml}</div>
+      ${actionHtml}
     </div>`;
   }).join('');
 }
@@ -240,6 +283,29 @@ async function loadPerformanceChart() {
     datasets.push({ agentId: agent.id, snapshots: perf.snapshots || [] });
   }
   renderPerformanceChart('performance-chart', datasets);
+}
+
+function renderSectorConcentrationWarning(warnings) {
+  const el = document.getElementById('sector-concentration-warning');
+  if (!el) return;
+  if (!warnings || !warnings.length) {
+    el.classList.add('hidden');
+    return;
+  }
+  el.classList.remove('hidden');
+  el.innerHTML = `
+    <div class="bg-warning/5 border border-warning/30 rounded-2xl p-4 flex items-start gap-3">
+      <span class="material-symbols-outlined text-warning text-xl shrink-0 mt-0.5">warning</span>
+      <div>
+        <p class="text-xs font-bold text-warning mb-1">섹터 집중도 경고</p>
+        <div class="space-y-0.5">
+          ${warnings.map(w => `
+            <p class="text-xs text-gray-400">${w.description || w.msg || ''}</p>
+          `).join('')}
+        </div>
+        <p class="text-[10px] text-gray-600 mt-1">특정 섹터 60% 이상 집중 — 분산 투자 권장</p>
+      </div>
+    </div>`;
 }
 
 function renderConflicts(conflicts) {
@@ -324,7 +390,7 @@ function renderUnifiedPortfolio(portfolio) {
     const countColor = agentCount >= 4 ? 'text-primary font-bold' : agentCount >= 2 ? 'text-gray-300' : 'text-gray-500';
     const statusBg = agentCount >= 3 ? 'bg-success/10 text-success' : 'bg-gray-800 text-gray-400';
     return `
-    <tr class="hover:bg-white/5 transition-colors cursor-pointer" onclick="goToStock('${p.ticker}')">
+    <tr class="hover:bg-white/5 transition-colors cursor-pointer group" onclick="goToStock('${p.ticker}')" title="클릭하여 종목뷰에서 에이전트별 스탠스 비교">
       <td class="px-6 py-4">
         <div class="flex items-center gap-3">
           <div class="w-8 h-8 bg-[#2a2f3e] rounded flex items-center justify-center text-[10px] font-bold text-white">${(p.ticker||'').slice(0,4)}</div>
@@ -338,7 +404,10 @@ function renderUnifiedPortfolio(portfolio) {
       <td class="px-6 py-4 text-sm text-gray-500">${p.sector || '—'}</td>
       <td class="px-6 py-4 text-sm ${countColor}">${agentCount}명 보유</td>
       <td class="px-6 py-4 text-right">
-        <span class="px-2 py-1 text-[10px] font-bold rounded ${statusBg}">${agentCount >= 3 ? 'HOT' : 'HOLD'}</span>
+        <div class="flex items-center justify-end gap-2">
+          <span class="px-2 py-1 text-[10px] font-bold rounded ${statusBg}">${agentCount >= 3 ? 'HOT' : 'HOLD'}</span>
+          <span class="material-symbols-outlined text-sm text-gray-600 group-hover:text-primary transition-colors">open_in_new</span>
+        </div>
       </td>
     </tr>`;
   }).join('');
