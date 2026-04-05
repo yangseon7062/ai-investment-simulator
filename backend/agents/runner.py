@@ -222,25 +222,26 @@ async def run_single_agent(agent_config, market_context: dict) -> dict:
                     "volume_spike": True,  # LLM이 이유를 알 수 있도록 표시
                 })
 
-    # 후보 종목 추가 정보 수집 (뉴스 + 수급 + 52주 고저 + PBR/PER)
+    # 후보 종목 추가 정보 수집 (뉴스 + 수급 + 52주 고저)
+    # volume_spike 종목 포함하여 전체 후보에서 뉴스 수집 (top5 제한 제거)
     from backend.services.news_fetcher import fetch_naver_stock_news
     from backend.services.data_fetcher import get_yfinance_news, get_foreign_buying, get_52week_high_low
 
-    kr_top = [(c["ticker"], c.get("name", c["ticker"])) for c in candidates if c.get("market") == "KR"][:5]
-    us_top = [c["ticker"] for c in candidates if c.get("market") == "US"][:5]
-    kr_tickers_top = [t for t, _ in kr_top]
+    kr_all = [(c["ticker"], c.get("name", c["ticker"])) for c in candidates if c.get("market") == "KR"]
+    us_all = [c["ticker"] for c in candidates if c.get("market") == "US"]
+    kr_tickers_top = [t for t, _ in kr_all]
 
     (kr_news_results, us_news_map, kr_supply, kr_52w, us_52w) = await asyncio.gather(
-        asyncio.gather(*[fetch_naver_stock_news(t, n) for t, n in kr_top], return_exceptions=True) if kr_top else asyncio.sleep(0),
-        get_yfinance_news(us_top) if us_top else asyncio.sleep(0),
+        asyncio.gather(*[fetch_naver_stock_news(t, n) for t, n in kr_all], return_exceptions=True) if kr_all else asyncio.sleep(0),
+        get_yfinance_news(us_all) if us_all else asyncio.sleep(0),
         get_foreign_buying(kr_tickers_top) if kr_tickers_top else asyncio.sleep(0),
         get_52week_high_low(kr_tickers_top, "KR") if kr_tickers_top else asyncio.sleep(0),
-        get_52week_high_low(us_top, "US") if us_top else asyncio.sleep(0),
+        get_52week_high_low(us_all, "US") if us_all else asyncio.sleep(0),
     )
 
     # 뉴스
-    if kr_top and isinstance(kr_news_results, (list, tuple)):
-        kr_news_map = {t: (r if isinstance(r, list) else []) for (t, _), r in zip(kr_top, kr_news_results)}
+    if kr_all and isinstance(kr_news_results, (list, tuple)):
+        kr_news_map = {t: (r if isinstance(r, list) else []) for (t, _), r in zip(kr_all, kr_news_results)}
         for c in candidates:
             if c.get("market") == "KR" and c["ticker"] in kr_news_map:
                 c["recent_news"] = [n["title"] for n in kr_news_map[c["ticker"]][:3]]
@@ -262,18 +263,32 @@ async def run_single_agent(agent_config, market_context: dict) -> dict:
                 if c.get("market") == mkt and c["ticker"] in hw:
                     c.update(hw[c["ticker"]])
 
-    # PBR/PER (financials_cache에서)
-    async with get_db() as conn:
-        for c in candidates:
-            row = await conn.fetchrow(
-                "SELECT pbr, per, roic, revenue_growth FROM financials_cache WHERE ticker = $1 AND market = $2 ORDER BY fiscal_quarter DESC LIMIT 1",
-                c["ticker"], c.get("market", "KR"),
+    # PBR/PER/ROIC/revenue_growth (financials_cache 배치 쿼리)
+    ticker_market_pairs = [(c["ticker"], c.get("market", "KR")) for c in candidates]
+    if ticker_market_pairs:
+        tickers_only = [t for t, _ in ticker_market_pairs]
+        async with get_db() as conn:
+            fin_rows = await conn.fetch(
+                """SELECT DISTINCT ON (ticker, market)
+                          ticker, market, pbr, per, roic, revenue_growth,
+                          gross_margin, fcf, debt_ratio
+                   FROM financials_cache
+                   WHERE ticker = ANY($1)
+                   ORDER BY ticker, market, fiscal_quarter DESC""",
+                tickers_only,
             )
-            if row:
+        fin_map = {(r["ticker"], r["market"]): dict(r) for r in fin_rows}
+        for c in candidates:
+            key = (c["ticker"], c.get("market", "KR"))
+            if key in fin_map:
+                row = fin_map[key]
                 c["pbr"] = row["pbr"]
                 c["per"] = row["per"]
                 c["roic"] = row["roic"]
                 c["revenue_growth"] = row["revenue_growth"]
+                c["gross_margin"] = row["gross_margin"]
+                c["fcf"] = row["fcf"]
+                c["debt_ratio"] = row["debt_ratio"]
 
     # 후보 종목에 공감대 정보 추가 (보유 현황만 — 판단 의도 제외)
     for c in candidates:

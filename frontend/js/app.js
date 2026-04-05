@@ -108,11 +108,12 @@ async function loadMain() {
     '<span class="inline-flex items-center gap-2"><span class="material-symbols-outlined animate-spin text-lg align-middle">progress_activity</span>서버 응답 대기 중…</span>';
   document.getElementById('banner-body').textContent = '(첫 로드 시 최대 30초 소요될 수 있습니다)';
 
-  const [summary, portfolio, conflicts, agentsList] = await Promise.all([
+  const [summary, portfolio, conflicts, agentsList, consensus] = await Promise.all([
     apiFetch('/api/dashboard/summary').catch(() => ({})),
     apiFetch('/api/dashboard/portfolio').catch(() => []),
     apiFetch('/api/dashboard/conflicts').catch(() => []),
     apiFetch('/api/agents/').catch(() => []),
+    apiFetch('/api/dashboard/consensus').catch(() => []),
   ]);
 
   const snap = summary.snapshot || {};
@@ -141,6 +142,9 @@ async function loadMain() {
 
   // Portfolio table
   renderUnifiedPortfolio(portfolio);
+
+  // 중복 추천 섹션
+  renderConsensus(consensus);
 
   // Recent logs
   const logs = await apiFetch('/api/logs/?limit=8').catch(() => []);
@@ -257,6 +261,52 @@ function renderConflicts(conflicts) {
       </div>
       <p class="text-sm font-bold text-white mb-1 truncate">${summary.slice(0,40) || '—'}</p>
       <p class="text-xs text-gray-400 truncate">${summary.slice(40,100)}</p>
+    </div>`;
+  }).join('');
+}
+
+function renderConsensus(consensus) {
+  const el = document.getElementById('consensus-section');
+  if (!el) return;
+  if (!consensus || !consensus.length) {
+    el.innerHTML = '<p class="text-xs text-gray-600 py-2">중복 보유 종목 없음</p>';
+    return;
+  }
+  el.innerHTML = consensus.map(c => {
+    const agentBadges = (c.agents || []).map(id => {
+      const agent = AGENTS.find(a => a.id === id);
+      if (!agent) return `<span class="text-[10px] px-1.5 py-0.5 rounded bg-gray-700 text-gray-400">${id}</span>`;
+      return `<span class="text-[10px] px-1.5 py-0.5 rounded font-medium" style="background:${agent.color}22;color:${agent.color}">${agent.name}</span>`;
+    }).join('');
+
+    // 이유 비교 (thesis)
+    const details = c.agent_details || [];
+    const reasonRows = details.map(d => {
+      const agent = AGENTS.find(a => a.id === d.agent_id);
+      const color = agent ? agent.color : '#888';
+      const name = agent ? agent.name : d.agent_id;
+      return `<div class="flex gap-2 text-[10px] mt-1">
+        <span class="shrink-0 font-medium" style="color:${color}">${name}</span>
+        <span class="text-gray-400">${d.thesis || '테제 없음'}</span>
+      </div>`;
+    }).join('');
+
+    const sameLabel = c.same_reason === true
+      ? '<span class="text-[9px] text-warning/80 ml-1">같은 이유</span>'
+      : c.same_reason === false
+        ? '<span class="text-[9px] text-primary/80 ml-1">다른 이유</span>'
+        : '';
+
+    return `
+    <div class="bg-card border border-gray-800 rounded-xl p-3 mb-2">
+      <div class="flex items-center gap-2 mb-1.5">
+        <span class="text-xs font-bold text-white">${c.name || c.ticker}</span>
+        <span class="text-[10px] text-gray-500">${c.ticker} · ${c.market}</span>
+        ${sameLabel}
+        <span class="ml-auto text-[10px] text-gray-500">${c.agent_count}개 에이전트</span>
+      </div>
+      <div class="flex gap-1 flex-wrap mb-2">${agentBadges}</div>
+      <div class="border-t border-gray-800/60 pt-2">${reasonRows}</div>
     </div>`;
   }).join('');
 }

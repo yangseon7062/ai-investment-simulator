@@ -113,7 +113,8 @@ AGENTS: dict[str, AgentConfig] = {
         score_weights={"technical": 0.2, "fundamental": 0.8, "sentiment": 0.0},
         monitor_daily=False,
         required_data=["price", "roic"],  # ROIC 없는 종목은 해자 검증 불가 → 제외
-        key_data=["roic", "pbr", "per", "revenue_growth", "sector_etf"],
+        key_data=["roic", "pbr", "per", "revenue_growth", "sector_etf",
+                  "gross_margin", "fcf", "debt_ratio"],
         forbidden_topics=["VIX", "공포탐욕지수", "거래량 급증", "단기 모멘텀", "시장 분위기"],
         show_consensus=True,    # 보유 현황만 참고 (중복 진입 방지)
         show_mdd=True,
@@ -143,7 +144,7 @@ AGENTS: dict[str, AgentConfig] = {
         score_weights={"technical": 0.8, "fundamental": 0.1, "sentiment": 0.1},
         required_data=["price", "technical_score"],  # 기술 스코어 없으면 모멘텀 판단 불가
         key_data=["technical_score", "foreign_net_3d", "institution_net_3d",
-                  "pct_from_high", "recent_news"],
+                  "pct_from_high", "recent_news", "gap_pct"],
         forbidden_topics=["기업 성장성", "ROIC", "PBR", "PER", "매출성장률", "장기 전망"],
         show_consensus=True,
         show_mdd=False,         # 서퍼는 단기 타이밍 — MDD는 판단 흐림
@@ -204,7 +205,7 @@ AGENTS: dict[str, AgentConfig] = {
         inverse_etf_only=True,
         required_data=["price"],
         key_data=["vix", "fred", "regime", "sector_etf", "narrative",
-                  "fear_greed"],  # 컨트라리안 흡수: fear_greed 추가
+                  "fear_greed", "hy_spread", "ig_spread"],  # 컨트라리안 흡수 + credit spread
         forbidden_topics=["긍정적 전망", "매수 기회", "성장 스토리", "ROIC", "PBR"],
         show_consensus=False,   # 베어는 독립적 하락 판단 — 타 에이전트 영향 차단
         show_mdd=True,

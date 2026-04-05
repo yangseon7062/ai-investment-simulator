@@ -63,12 +63,14 @@ def get_fred_indicators() -> dict:
     try:
         fred = Fred(api_key=FRED_API_KEY)
         indicators = {
-            "FED_RATE":  "FEDFUNDS",
-            "CPI_YOY":   "CPIAUCSL",
+            "FED_RATE":    "FEDFUNDS",
+            "CPI_YOY":     "CPIAUCSL",
             "UNEMPLOYMENT": "UNRATE",
-            "GDP_GROWTH": "A191RL1Q225SBEA",
-            "10Y_YIELD": "DGS10",
-            "2Y_YIELD":  "DGS2",
+            "GDP_GROWTH":  "A191RL1Q225SBEA",
+            "10Y_YIELD":   "DGS10",
+            "2Y_YIELD":    "DGS2",
+            "HY_SPREAD":   "BAMLH0A0HYM2",   # HY OAS: 하이일드 크레딧 스프레드 (베어 핵심 지표)
+            "IG_SPREAD":   "BAMLC0A0CM",      # IG OAS: 투자등급 크레딧 스프레드
         }
         result = {}
         for key, series_id in indicators.items():
@@ -98,9 +100,11 @@ async def get_us_prices(tickers: list[str]) -> dict:
     if isinstance(df.columns, pd.MultiIndex):
         close = df["Close"]
         volume = df["Volume"]
+        open_prices = df.get("Open", pd.DataFrame())
     else:
         close = df[["Close"]]
         volume = df[["Volume"]]
+        open_prices = df[["Open"]] if "Open" in df.columns else pd.DataFrame()
 
     for ticker in tickers:
         try:
@@ -108,6 +112,16 @@ async def get_us_prices(tickers: list[str]) -> dict:
             vols = volume[ticker].dropna()
             if len(prices) < 2:
                 continue
+            # gap % = (당일 시가 - 전일 종가) / 전일 종가 * 100
+            gap_pct = None
+            try:
+                if not open_prices.empty and ticker in open_prices.columns:
+                    today_open = float(open_prices[ticker].dropna().iloc[-1])
+                    prev_close = float(prices.iloc[-2])
+                    if prev_close > 0:
+                        gap_pct = round((today_open - prev_close) / prev_close * 100, 2)
+            except Exception:
+                pass
             result[ticker] = {
                 "price": float(prices.iloc[-1]),
                 "prev_price": float(prices.iloc[-2]),
@@ -115,6 +129,7 @@ async def get_us_prices(tickers: list[str]) -> dict:
                 "volume": float(vols.iloc[-1]),
                 "avg_volume_20d": float(vols.iloc[-20:].mean()),
                 "prices_60d": prices.tolist(),
+                "gap_pct": gap_pct,
             }
         except Exception:
             pass
@@ -139,6 +154,17 @@ async def get_kr_prices(tickers: list[str]) -> dict:
                         continue
                     prices = df["종가"].dropna()
                     vols = df["거래량"].dropna()
+                    # gap % = (당일 시가 - 전일 종가) / 전일 종가 * 100
+                    gap_pct = None
+                    try:
+                        opens = df["시가"].dropna()
+                        if len(opens) > 1 and len(prices) > 1:
+                            today_open = float(opens.iloc[-1])
+                            prev_close = float(prices.iloc[-2])
+                            if prev_close > 0:
+                                gap_pct = round((today_open - prev_close) / prev_close * 100, 2)
+                    except Exception:
+                        pass
                     result[ticker] = {
                         "price": float(prices.iloc[-1]),
                         "prev_price": float(prices.iloc[-2]) if len(prices) > 1 else float(prices.iloc[-1]),
@@ -146,6 +172,7 @@ async def get_kr_prices(tickers: list[str]) -> dict:
                         "volume": float(vols.iloc[-1]),
                         "avg_volume_20d": float(vols.iloc[-20:].mean()),
                         "prices_60d": prices.tolist(),
+                        "gap_pct": gap_pct,
                     }
                 except Exception:
                     pass
@@ -320,6 +347,31 @@ async def get_us_financials(ticker: str) -> Optional[dict]:
                 if rev_prev != 0:
                     revenue_growth = float((rev_now - rev_prev) / abs(rev_prev) * 100)
 
+            # Gross Margin (매출총이익률)
+            gross_margin = None
+            if "Gross Profit" in income.index and revenue and revenue != 0:
+                gross_profit = float(income.loc["Gross Profit"].iloc[0])
+                gross_margin = float(gross_profit / revenue * 100)
+
+            # FCF (잉여현금흐름) = 영업현금흐름 - 설비투자
+            fcf = None
+            try:
+                cashflow = t.quarterly_cashflow
+                if not cashflow.empty:
+                    op_cf_key = next((k for k in ["Operating Cash Flow", "Total Cash From Operating Activities"] if k in cashflow.index), None)
+                    capex_key = next((k for k in ["Capital Expenditure", "Capital Expenditures"] if k in cashflow.index), None)
+                    if op_cf_key:
+                        op_cf = float(cashflow.loc[op_cf_key].iloc[0])
+                        capex = float(cashflow.loc[capex_key].iloc[0]) if capex_key else 0
+                        fcf = float(op_cf + capex)  # capex는 음수로 기록됨
+            except Exception:
+                pass
+
+            # Debt Ratio (부채비율) = Total Debt / Stockholders Equity
+            debt_ratio = None
+            if total_debt and stockholders_equity and stockholders_equity != 0:
+                debt_ratio = float(total_debt / stockholders_equity * 100)
+
             return {
                 "revenue": revenue,
                 "operating_income": operating_income,
@@ -330,6 +382,9 @@ async def get_us_financials(ticker: str) -> Optional[dict]:
                 "pbr": float(pbr) if pbr else None,
                 "per": float(per) if per else None,
                 "revenue_growth": revenue_growth,
+                "gross_margin": gross_margin,
+                "fcf": fcf,
+                "debt_ratio": debt_ratio,
             }
         except Exception:
             return None

@@ -288,6 +288,12 @@ async def generate_agent_decision(
         "vix": "VIX(시장 변동성지수)",
         "regime": "시장 국면(상승/하락/횡보/변동성)",
         "exchange_rate": "원달러 환율(달러 자산 매수 비용)",
+        "gross_margin": "매출총이익률 — 비즈니스 경쟁력",
+        "fcf": "FCF(잉여현금흐름) — 실제 현금 창출력",
+        "debt_ratio": "부채비율 — 재무 건전성",
+        "gap_pct": "갭(gap) % — 전일 종가 대비 당일 시가 괴리율 (양수=갭상승, 음수=갭하락)",
+        "hy_spread": "HY 크레딧 스프레드 — 하이일드 채권 위험 프리미엄 (높을수록 신용 위험 증가)",
+        "ig_spread": "IG 크레딧 스프레드 — 투자등급 채권 위험 프리미엄",
     }
     key_data_lines = "\n".join(
         f"  - {_KEY_DATA_LABELS.get(k, k)}"

@@ -120,6 +120,9 @@ SCHEMA_SQL = [
         pbr                 REAL,
         per                 REAL,
         revenue_growth      REAL,
+        gross_margin        REAL,
+        fcf                 REAL,
+        debt_ratio          REAL,
         updated_at          TIMESTAMPTZ DEFAULT NOW(),
         UNIQUE(ticker, fiscal_quarter)
     )
@@ -243,11 +246,27 @@ KR_STOCKS = [
 ]
 
 
+MIGRATIONS = [
+    # financials_cache 컬럼 추가 (기존 DB 대응)
+    "ALTER TABLE financials_cache ADD COLUMN IF NOT EXISTS gross_margin REAL",
+    "ALTER TABLE financials_cache ADD COLUMN IF NOT EXISTS fcf REAL",
+    "ALTER TABLE financials_cache ADD COLUMN IF NOT EXISTS debt_ratio REAL",
+    # investment_logs hold 타입 (CHECK 제약 없으면 자동 허용, 있으면 수정 필요)
+]
+
+
 async def init_db():
     async with get_db() as conn:
         print("테이블 생성 중...")
         for sql in SCHEMA_SQL:
             await conn.execute(sql)
+
+        print("마이그레이션 적용 중...")
+        for sql in MIGRATIONS:
+            try:
+                await conn.execute(sql)
+            except Exception as e:
+                print(f"  마이그레이션 스킵 (이미 적용됨): {e}")
 
         print("에이전트 포트폴리오 초기화 (1억원)...")
         for agent_id in AGENTS:

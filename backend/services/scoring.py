@@ -224,14 +224,18 @@ async def _update_financials_cache(us_tickers: list, kr_tickers: list):
                 await conn.execute(
                     """INSERT INTO financials_cache
                        (ticker, market, fiscal_quarter, revenue, operating_income, net_income,
-                        total_assets, invested_capital, roic, pbr, per, revenue_growth)
-                       VALUES ($1,'US',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+                        total_assets, invested_capital, roic, pbr, per, revenue_growth,
+                        gross_margin, fcf, debt_ratio)
+                       VALUES ($1,'US',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
                        ON CONFLICT (ticker, fiscal_quarter) DO UPDATE SET
                          roic=EXCLUDED.roic, pbr=EXCLUDED.pbr, per=EXCLUDED.per,
-                         revenue_growth=EXCLUDED.revenue_growth, updated_at=NOW()""",
+                         revenue_growth=EXCLUDED.revenue_growth,
+                         gross_margin=EXCLUDED.gross_margin, fcf=EXCLUDED.fcf,
+                         debt_ratio=EXCLUDED.debt_ratio, updated_at=NOW()""",
                     ticker, quarter, data.get("revenue"), data.get("operating_income"),
                     data.get("net_income"), data.get("total_assets"), data.get("invested_capital"),
                     data.get("roic"), data.get("pbr"), data.get("per"), data.get("revenue_growth"),
+                    data.get("gross_margin"), data.get("fcf"), data.get("debt_ratio"),
                 )
         except Exception:
             pass

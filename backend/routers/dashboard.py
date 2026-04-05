@@ -60,6 +60,54 @@ async def get_conflicts():
     return [dict(r) for r in debates]
 
 
+@router.get("/consensus")
+async def get_consensus():
+    """중복 추천 종목 — 2개 이상 에이전트가 보유 중인 종목 + 각 에이전트별 이유(thesis)"""
+    rows = await fetchall(
+        """SELECT t.ticker, c.name, t.market, c.sector,
+                  COUNT(DISTINCT t.agent_id) AS agent_count,
+                  ARRAY_AGG(DISTINCT t.agent_id ORDER BY t.agent_id) AS agents,
+                  JSON_AGG(
+                      JSON_BUILD_OBJECT(
+                          'agent_id', t.agent_id,
+                          'thesis', l.thesis,
+                          'status', t.status,
+                          'price', t.price,
+                          'trade_date', t.trade_date
+                      ) ORDER BY t.agent_id
+                  ) AS agent_details
+           FROM simulated_trades t
+           LEFT JOIN company_info c ON t.ticker = c.ticker AND t.market = c.market
+           LEFT JOIN investment_logs l ON t.log_id = l.id
+           WHERE t.status != 'closed'
+           GROUP BY t.ticker, c.name, t.market, c.sector
+           HAVING COUNT(DISTINCT t.agent_id) >= 2
+           ORDER BY agent_count DESC"""
+    )
+    result = []
+    for r in rows:
+        row = dict(r)
+        # agent_details가 문자열이면 파싱
+        details = row.get("agent_details")
+        if isinstance(details, str):
+            import json
+            details = json.loads(details)
+        # thesis가 같은지 다른지 판단
+        theses = [d.get("thesis") for d in (details or []) if d.get("thesis")]
+        same_reason = len(set(theses)) <= 1 if theses else None
+        result.append({
+            "ticker": row["ticker"],
+            "name": row["name"],
+            "market": row["market"],
+            "sector": row["sector"],
+            "agent_count": row["agent_count"],
+            "agents": row["agents"],
+            "agent_details": details,
+            "same_reason": same_reason,
+        })
+    return result
+
+
 @router.get("/notifications")
 async def get_notifications():
     """알림 — event_logs 최근 20건"""
