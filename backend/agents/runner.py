@@ -177,20 +177,52 @@ async def run_single_agent(agent_config, market_context: dict) -> dict:
             "XLK": "XLK", "SMH": "SMH", "XLV": "XLV",
             "XLF": "XLF", "XLE": "XLE", "ITA": "ITA", "XLC": "XLC",
         }
-        candidates = [
+        etf_candidates = [
             {"ticker": v, "name": k,
              "market": "US" if len(v) <= 4 and v.isalpha() else "KR",
-             "agent_score": 70, "price": 1.0}
+             "agent_score": 70}
             for k, v in etf_tickers.items()
         ]
+        # 실제 ETF 가격 수집
+        from backend.services.data_fetcher import get_kr_prices, get_us_prices
+        etf_kr = [c["ticker"] for c in etf_candidates if c["market"] == "KR"]
+        etf_us = [c["ticker"] for c in etf_candidates if c["market"] == "US"]
+        etf_prices_kr, etf_prices_us = await asyncio.gather(
+            get_kr_prices(etf_kr) if etf_kr else asyncio.sleep(0),
+            get_us_prices(etf_us) if etf_us else asyncio.sleep(0),
+        )
+        etf_price_map = {}
+        if isinstance(etf_prices_kr, dict):
+            etf_price_map.update({t: v["price"] for t, v in etf_prices_kr.items() if v.get("price")})
+        if isinstance(etf_prices_us, dict):
+            etf_price_map.update({t: v["price"] for t, v in etf_prices_us.items() if v.get("price")})
+        for c in etf_candidates:
+            c["price"] = etf_price_map.get(c["ticker"], 0)
+        # 가격 없는 ETF 제외
+        candidates = [c for c in etf_candidates if c.get("price", 0) > 0]
 
     # 베어는 인버스 ETF만
     elif agent_config.inverse_etf_only:
         from backend.config import INVERSE_ETFS
-        candidates = [
+        from backend.services.data_fetcher import get_kr_prices, get_us_prices
+        inv_candidates = [
             {"ticker": v, "name": k, "market": "KR" if k.startswith("KR") else "US", "agent_score": 80}
             for k, v in INVERSE_ETFS.items()
         ]
+        inv_kr = [c["ticker"] for c in inv_candidates if c["market"] == "KR"]
+        inv_us = [c["ticker"] for c in inv_candidates if c["market"] == "US"]
+        inv_prices_kr, inv_prices_us = await asyncio.gather(
+            get_kr_prices(inv_kr) if inv_kr else asyncio.sleep(0),
+            get_us_prices(inv_us) if inv_us else asyncio.sleep(0),
+        )
+        inv_price_map = {}
+        if isinstance(inv_prices_kr, dict):
+            inv_price_map.update({t: v["price"] for t, v in inv_prices_kr.items() if v.get("price")})
+        if isinstance(inv_prices_us, dict):
+            inv_price_map.update({t: v["price"] for t, v in inv_prices_us.items() if v.get("price")})
+        for c in inv_candidates:
+            c["price"] = inv_price_map.get(c["ticker"], 0)
+        candidates = [c for c in inv_candidates if c.get("price", 0) > 0]
     else:
         candidates = candidates[:20]
         # 거래량 급등 종목 강제 포함 (technical_score >= 80, 기존 후보에 없는 종목)
