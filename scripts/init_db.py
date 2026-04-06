@@ -284,7 +284,7 @@ MIGRATIONS = [
     "ALTER TABLE investment_logs ADD COLUMN IF NOT EXISTS confidence TEXT",
     # financials_cache UNIQUE 제약 market 추가 (기존 제약 제거 후 재생성)
     "ALTER TABLE financials_cache DROP CONSTRAINT IF EXISTS financials_cache_ticker_fiscal_quarter_key",
-    "ALTER TABLE financials_cache ADD CONSTRAINT IF NOT EXISTS financials_cache_ticker_market_quarter_key UNIQUE (ticker, market, fiscal_quarter)",
+    "ALTER TABLE financials_cache ADD CONSTRAINT financials_cache_ticker_market_quarter_key UNIQUE (ticker, market, fiscal_quarter)",
     # 에이전트 7→5 (analyst, contrarian 제거)
     "DELETE FROM agent_portfolios WHERE agent_id IN ('analyst', 'contrarian')",
     # news_articles 테이블 (뉴스 증가율 인프라)

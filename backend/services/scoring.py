@@ -246,10 +246,49 @@ async def _update_financials_cache(us_tickers: list, kr_tickers: list):
         except Exception:
             pass
 
-    tasks = [_save_us(t) for t in to_fetch_us[:20]] + [_save_kr(t) for t in to_fetch_kr[:10]]
+    tasks = [_save_us(t) for t in to_fetch_us] + [_save_kr(t) for t in to_fetch_kr]
     if tasks:
         await asyncio.gather(*tasks, return_exceptions=True)
-        print(f"  재무 캐시: US {len(to_fetch_us[:20])}개 + KR {len(to_fetch_kr[:10])}개 업데이트")
+        print(f"  재무 캐시: US {len(to_fetch_us)}개 + KR {len(to_fetch_kr)}개 업데이트")
+
+
+async def _update_daily_valuation(us_tickers: list, kr_tickers: list):
+    """PBR/PER는 주가에 따라 매일 변동 → 기존 캐시 행의 pbr/per만 갱신"""
+    import yfinance as yf
+    from datetime import datetime
+    quarter = f"{datetime.now().year}Q{(datetime.now().month - 1) // 3 + 1}"
+    loop = asyncio.get_event_loop()
+
+    def _fetch_valuation(sym):
+        try:
+            info = yf.Ticker(sym).info
+            pbr = info.get("priceToBook")
+            pe = info.get("trailingPE") or info.get("forwardPE")
+            return pbr, pe
+        except Exception:
+            return None, None
+
+    async def _update(ticker, sym, market):
+        try:
+            pbr, per = await loop.run_in_executor(None, _fetch_valuation, sym)
+            if pbr is None and per is None:
+                return
+            async with get_db() as conn:
+                await conn.execute(
+                    """UPDATE financials_cache
+                       SET pbr=$1, per=$2, updated_at=NOW()
+                       WHERE ticker=$3 AND market=$4 AND fiscal_quarter=$5""",
+                    pbr, per, ticker, market, quarter,
+                )
+        except Exception:
+            pass
+
+    tasks = (
+        [_update(t, t, "US") for t in us_tickers] +
+        [_update(t, t + ".KS", "KR") for t in kr_tickers]
+    )
+    await asyncio.gather(*tasks, return_exceptions=True)
+    print(f"  PBR/PER 일별 갱신: US {len(us_tickers)}개 + KR {len(kr_tickers)}개")
 
 
 # ── 메인 스코어링 실행 ──────────────────────────────────────────────
@@ -269,9 +308,13 @@ async def run_scoring_engine():
     kr_tickers, us_tickers = await load_screening_pool()
     print(f"  KR {len(kr_tickers)}종목 / US {len(us_tickers)}종목")
 
-    # ── 재무 캐시 업데이트 (캐시 없는 종목만, 최대 30개/일) ──
+    # ── 재무 캐시 업데이트 (캐시 없는 종목 전체) ──
     print("  재무 캐시 업데이트 중...")
-    await _update_financials_cache(us_tickers[:30], kr_tickers[:20])
+    await _update_financials_cache(us_tickers, kr_tickers)
+
+    # ── PBR/PER 일별 갱신 (주가 변동 반영) ──
+    print("  PBR/PER 일별 갱신 중...")
+    await _update_daily_valuation(us_tickers, kr_tickers)
 
     # ── 시세 수집 ──
     print("  시세 수집 중...")
