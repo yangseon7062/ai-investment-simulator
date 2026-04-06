@@ -683,13 +683,32 @@ async def monitor_position(
     if spike_pct is not None:
         spike_note = f"\n⚠️ **오늘 급락 감지: {spike_pct:+.1f}%** — 즉각적 테제 재검토 필요"
 
-    # 최신 뉴스 섹션
+    # 최신 뉴스 섹션 — 서퍼는 뉴스 판단 근거 사용 금지
     news_list = position.get("recent_news", [])
     news_section = ""
-    if news_list:
-        news_section = "\n## 최신 종목 뉴스\n" + "\n".join(f"- {n}" for n in news_list) + "\n"
+    if agent_config.agent_id != "surfer":
+        if news_list:
+            news_section = "\n## 최신 종목 뉴스\n" + "\n".join(f"- {n}" for n in news_list) + "\n"
+        else:
+            news_section = "\n## 최신 종목 뉴스\n- ⚠️없음 (뉴스 수집 실패 또는 없음)\n"
+
+    # show_macro_context=False 에이전트는 VIX/공포탐욕 미표시
+    if agent_config.show_macro_context:
+        market_section = f"""## 현재 시장 상황
+국면: KR={market_context.get('regime_kr')} / US={market_context.get('regime_us')}
+VIX: {market_context.get('vix')} | 공포탐욕지수: {market_context.get('fear_greed')}
+{warning_context}"""
     else:
-        news_section = "\n## 최신 종목 뉴스\n- ⚠️없음 (뉴스 수집 실패 또는 없음)\n"
+        market_section = f"""## 현재 시장 상황
+국면: KR={market_context.get('regime_kr')} / US={market_context.get('regime_us')}"""
+
+    # 서퍼는 테제 개념 없음 — 기술 신호 기반 점검
+    if agent_config.agent_id == "surfer":
+        thesis_line = f"매수 신호 근거: {original_thesis}"
+        judgment_instruction = "이 포지션의 기술적 신호(가격 모멘텀, 거래량)가 아직 유효한지 판단하세요. 테제나 펀더멘털은 언급하지 마세요."
+    else:
+        thesis_line = f"매수 테제: {original_thesis}"
+        judgment_instruction = "이 포지션의 투자 테제가 아직 유효한지 판단하세요."
 
     prompt = f"""
 ## 보유 포지션
@@ -698,16 +717,13 @@ async def monitor_position(
 현재가: {current_price:,.0f}
 수익률: {pnl_pct:+.2f}%
 보유 기간: {holding_days}일
-매수 테제: {original_thesis}
+{thesis_line}
 현재 상태: {position.get('status', 'hold')}{spike_note}
 {news_section}
-## 현재 시장 상황
-국면: KR={market_context.get('regime_kr')} / US={market_context.get('regime_us')}
-VIX: {market_context.get('vix')} | 공포탐욕지수: {market_context.get('fear_greed')}
-{warning_context}
+{market_section}
 ---
 
-이 포지션의 투자 테제가 아직 유효한지 판단하세요.
+{judgment_instruction}
 
 **반드시 다음 JSON 형식으로 응답:**
 {{
