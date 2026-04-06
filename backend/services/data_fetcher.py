@@ -216,10 +216,6 @@ async def get_foreign_buying(tickers: list[str]) -> dict:
     return await loop.run_in_executor(None, _fetch)
 
 
-async def get_kr_supply_demand(tickers: list[str]) -> dict:
-    """KR 종목 외국인+기관 수급 (get_foreign_buying alias)"""
-    return await get_foreign_buying(tickers)
-
 
 async def get_52week_high_low(tickers: list[str], market: str) -> dict:
     """52주 고저가 및 현재가 대비 위치"""
@@ -229,8 +225,25 @@ async def get_52week_high_low(tickers: list[str], market: str) -> dict:
         result = {}
         for ticker in tickers:
             try:
-                t = ticker if market == "US" else ticker + ".KS"
-                info = yf.Ticker(t).fast_info
+                if market == "US":
+                    suffixes = [ticker]
+                else:
+                    # KOSPI 우선 시도, 실패 시 KOSDAQ(.KQ) 폴백
+                    suffixes = [ticker + ".KS", ticker + ".KQ"]
+
+                info = None
+                for sym in suffixes:
+                    try:
+                        _info = yf.Ticker(sym).fast_info
+                        if getattr(_info, "fifty_two_week_high", None):
+                            info = _info
+                            break
+                    except Exception:
+                        continue
+
+                if info is None:
+                    continue
+
                 high52 = getattr(info, "fifty_two_week_high", None)
                 low52 = getattr(info, "fifty_two_week_low", None)
                 current = getattr(info, "last_price", None)
@@ -548,7 +561,7 @@ async def update_stock_universe():
         # 2차전지
         "006400": "삼성SDI", "051910": "LG화학", "247540": "에코프로비엠",
         "373220": "LG에너지솔루션", "096770": "SK이노베이션", "011790": "SKC",
-        "086520": "에코프로", "316140": "우리금융지주",
+        "086520": "에코프로",
         # 자동차
         "005380": "현대차", "000270": "기아", "012330": "현대모비스",
         "064960": "S&T모티브", "161390": "한국타이어앤테크놀로지",

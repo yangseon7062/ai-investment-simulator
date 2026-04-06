@@ -55,6 +55,7 @@ SCHEMA_SQL = [
         report_md           TEXT NOT NULL,
         thesis              TEXT,
         thesis_valid        BOOLEAN,
+        confidence          TEXT,
         market_regime_kr    TEXT,
         market_regime_us    TEXT,
         market_snapshot_id  INTEGER,
@@ -124,7 +125,7 @@ SCHEMA_SQL = [
         fcf                 REAL,
         debt_ratio          REAL,
         updated_at          TIMESTAMPTZ DEFAULT NOW(),
-        UNIQUE(ticker, fiscal_quarter)
+        UNIQUE(ticker, market, fiscal_quarter)
     )
     """,
     """
@@ -281,6 +282,9 @@ MIGRATIONS = [
     "ALTER TABLE financials_cache ADD COLUMN IF NOT EXISTS fcf REAL",
     "ALTER TABLE financials_cache ADD COLUMN IF NOT EXISTS debt_ratio REAL",
     "ALTER TABLE investment_logs ADD COLUMN IF NOT EXISTS confidence TEXT",
+    # financials_cache UNIQUE 제약 market 추가 (기존 제약 제거 후 재생성)
+    "ALTER TABLE financials_cache DROP CONSTRAINT IF EXISTS financials_cache_ticker_fiscal_quarter_key",
+    "ALTER TABLE financials_cache ADD CONSTRAINT IF NOT EXISTS financials_cache_ticker_market_quarter_key UNIQUE (ticker, market, fiscal_quarter)",
     # 에이전트 7→5 (analyst, contrarian 제거)
     "DELETE FROM agent_portfolios WHERE agent_id IN ('analyst', 'contrarian')",
     # news_articles 테이블 (뉴스 증가율 인프라)

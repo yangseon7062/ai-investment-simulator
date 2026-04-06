@@ -621,12 +621,16 @@ async function _fetchAndRenderLogs() {
   const list = document.getElementById('logs-list');
   list.innerHTML = '<div class="flex items-center gap-2 py-6 text-gray-600 text-xs"><span class="material-symbols-outlined animate-spin text-base">progress_activity</span>로딩 중…</div>';
 
-  const agent = document.getElementById('log-agent-filter')?.value || '';
-  const type  = document.getElementById('log-type-filter')?.value  || '';
+  const agent    = document.getElementById('log-agent-filter')?.value || '';
+  const type     = document.getElementById('log-type-filter')?.value  || '';
+  const fromDate = document.getElementById('log-from-date')?.value   || '';
+  const toDate   = document.getElementById('log-to-date')?.value     || '';
 
   let url = `/api/logs/?limit=${logsLimit}`;
-  if (agent) url += `&agent_id=${agent}`;
-  if (type)  url += `&log_type=${type}`;
+  if (agent)    url += `&agent_id=${agent}`;
+  if (type)     url += `&log_type=${type}`;
+  if (fromDate) url += `&from_date=${fromDate}`;
+  if (toDate)   url += `&to_date=${toDate}`;
 
   const logs = await apiFetch(url).catch(() => []);
   renderLogList(list, logs);

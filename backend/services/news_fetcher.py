@@ -11,7 +11,7 @@ import feedparser
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 from typing import Optional
-from backend.services.groq_service import summarize_macro_news, classify_stock_news
+from backend.services.groq_service import summarize_macro_news
 from backend.database import execute as db_execute, fetchall
 
 
@@ -173,31 +173,3 @@ async def get_news_trend(ticker: str, market: str) -> dict:
         }
     except Exception:
         return {"available": False}
-
-
-async def fetch_all_stock_news(tickers_names: list[tuple]) -> dict:
-    """
-    여러 종목 뉴스 병렬 수집 [(ticker, name), ...]
-    반환: {ticker: {"news": [...], "analysis": {...}}}
-    """
-    tasks = [fetch_naver_stock_news(ticker, name) for ticker, name in tickers_names]
-    raw_results = await asyncio.gather(*tasks, return_exceptions=True)
-
-    # Groq 분석 병렬 실행
-    analysis_tasks = []
-    valid_pairs = []
-    for (ticker, name), result in zip(tickers_names, raw_results):
-        news = result if isinstance(result, list) else []
-        valid_pairs.append((ticker, news))
-        analysis_tasks.append(classify_stock_news(ticker, name, news))
-
-    analyses = await asyncio.gather(*analysis_tasks, return_exceptions=True)
-
-    news_by_ticker = {}
-    for (ticker, news), analysis in zip(valid_pairs, analyses):
-        news_by_ticker[ticker] = {
-            "news": news,
-            "analysis": analysis if isinstance(analysis, dict) else {},
-        }
-
-    return news_by_ticker

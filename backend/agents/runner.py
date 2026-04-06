@@ -148,19 +148,23 @@ async def run_single_agent(agent_config, market_context: dict) -> dict:
         )
         recent_logs = [{k: (v.isoformat() if hasattr(v, 'isoformat') else v) for k, v in dict(r).items()} for r in rows]
 
-    # 최근 30일 손절 내역 (재진입 경계 정보)
+    # 최근 30일 손절 내역 + 사후검증 리포트 (실패 유형 피드백)
     async with get_db() as conn:
         loss_rows = await conn.fetch(
-            """SELECT ticker, pnl_pct, pnl_pct_krw, created_at
+            """SELECT ticker, pnl_pct, pnl_pct_krw, report_md, created_at
                FROM postmortems
                WHERE agent_id = $1 AND pnl_pct < 0 AND created_at > NOW() - INTERVAL '30 days'
                ORDER BY created_at DESC LIMIT 5""",
             agent_id,
         )
-        recent_losses = [
-            {k: (v.isoformat() if hasattr(v, 'isoformat') else v) for k, v in dict(r).items()}
-            for r in loss_rows
-        ]
+        recent_losses = []
+        for r in loss_rows:
+            row = {k: (v.isoformat() if hasattr(v, 'isoformat') else v) for k, v in dict(r).items()}
+            # report_md에서 핵심만 추출 (첫 300자) — 전문은 TPM 낭비
+            if row.get("report_md"):
+                row["failure_summary"] = row["report_md"][:300]
+            row.pop("report_md", None)
+            recent_losses.append(row)
 
     # 스코어 상위 종목 (KR + US)
     kr_candidates, us_candidates = await asyncio.gather(

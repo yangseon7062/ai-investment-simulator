@@ -10,6 +10,7 @@ async def get_summary():
     today_snap = await fetchone(
         "SELECT * FROM market_snapshots ORDER BY snapshot_date DESC LIMIT 1"
     )
+    # portfolio_snapshots 기반 성과 (스냅샷 없는 초기에도 에이전트 목록 유지)
     agents_perf = await fetchall(
         """SELECT p.agent_id,
                   p.total_value_krw AS total_return,
@@ -20,6 +21,16 @@ async def get_summary():
            WHERE p.snapshot_date = (SELECT MAX(snapshot_date) FROM portfolio_snapshots)
            ORDER BY total_return DESC"""
     )
+    # 스냅샷 없으면 에이전트 정의에서 기본값으로 채움
+    if not agents_perf:
+        from backend.agents.definitions import get_all_agents
+        agents_perf_list = [
+            {"agent_id": a.agent_id, "total_return": 0.0, "daily_return": None, "open_positions": 0}
+            for a in get_all_agents()
+        ]
+    else:
+        agents_perf_list = [dict(a) for a in agents_perf]
+
     api_cost = await fetchone(
         """SELECT SUM(estimated_cost) as total_cost, COUNT(*) as call_count
            FROM api_usage
@@ -27,7 +38,7 @@ async def get_summary():
     )
     return {
         "snapshot": dict(today_snap) if today_snap else {},
-        "agents": [dict(a) for a in agents_perf],
+        "agents": agents_perf_list,
         "api_cost": dict(api_cost) if api_cost else {},
     }
 

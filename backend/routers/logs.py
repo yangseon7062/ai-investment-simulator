@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Query
 from typing import Optional
+from datetime import date
 from backend.database import fetchall, fetchone
 
 router = APIRouter(prefix="/api/logs", tags=["logs"])
@@ -9,36 +10,32 @@ router = APIRouter(prefix="/api/logs", tags=["logs"])
 async def get_logs(
     agent_id: Optional[str] = None,
     log_type: Optional[str] = None,
+    from_date: Optional[date] = None,
+    to_date: Optional[date] = None,
     limit: int = Query(50, le=200),
 ):
-    conditions = []
-    params = []
-    if agent_id:
-        conditions.append(f"agent_id = ${len(params) + 1}")
-        params.append(agent_id)
-    if log_type:
-        conditions.append(f"log_type = ${len(params) + 1}")
-        params.append(log_type)
-    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-    params.append(limit)
+    # 파라미터 바인딩만 사용 — f-string SQL 조합 없음
     rows = await fetchall(
-        f"SELECT * FROM investment_logs {where} ORDER BY created_at DESC LIMIT ${len(params)}",
-        tuple(params),
+        """SELECT * FROM investment_logs
+           WHERE ($1::text IS NULL OR agent_id = $1)
+             AND ($2::text IS NULL OR log_type = $2)
+             AND ($3::date IS NULL OR created_at::date >= $3)
+             AND ($4::date IS NULL OR created_at::date <= $4)
+           ORDER BY created_at DESC
+           LIMIT $5""",
+        (agent_id, log_type, from_date, to_date, limit),
     )
     return [dict(r) for r in rows]
 
 
 @router.get("/postmortems/list")
-async def get_postmortems(agent_id: Optional[str] = None, limit: int = 30):
-    params = []
-    where = ""
-    if agent_id:
-        params.append(agent_id)
-        where = f"WHERE agent_id = ${len(params)}"
-    params.append(limit)
+async def get_postmortems(agent_id: Optional[str] = None, limit: int = Query(30, le=200)):
     rows = await fetchall(
-        f"SELECT * FROM postmortems {where} ORDER BY created_at DESC LIMIT ${len(params)}",
-        tuple(params),
+        """SELECT * FROM postmortems
+           WHERE ($1::text IS NULL OR agent_id = $1)
+           ORDER BY created_at DESC
+           LIMIT $2""",
+        (agent_id, limit),
     )
     return [dict(r) for r in rows]
 

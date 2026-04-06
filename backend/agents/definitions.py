@@ -85,7 +85,8 @@ AGENTS: dict[str, AgentConfig] = {
         required_data=["price"],
         key_data=["fred", "sector_etf", "narrative", "regime", "vix", "exchange_rate",
                   "fear_greed"],
-        forbidden_topics=["개별 종목 실적", "PBR", "PER", "ROIC", "매출성장률"],
+        forbidden_topics=["개별 종목 실적", "PBR", "PER", "ROIC", "매출성장률",
+                          "단일 변수만으로 진입 결정 (금리 하나, 환율 하나만 변해도 매수하는 행동)"],
         show_consensus=False,   # 매크로는 독립적 시장 판단 — 타 에이전트 영향 차단
         show_mdd=True,
         show_macro_context=True,
@@ -149,8 +150,9 @@ AGENTS: dict[str, AgentConfig] = {
                   "pct_from_high", "gap_pct"],
         # recent_news는 key_data에서 제외 — 뉴스는 보조 확인용, 판단 근거로 사용 금지
         forbidden_topics=["기업 성장성", "ROIC", "PBR", "PER", "매출성장률", "장기 전망",
-                          "뉴스 내용을 매수 근거로 사용"],
-        show_consensus=True,
+                          "뉴스 내용을 매수 근거로 사용",
+                          "급등한 종목을 뒤늦게 추격 (이미 오른 종목을 '아직 더 오를 것'이라는 이유로 진입)"],
+        show_consensus=False,   # 서퍼는 단기 모멘텀 — 타 에이전트 보유 현황 불필요
         show_mdd=False,         # 서퍼는 단기 타이밍 — MDD는 판단 흐림
         show_macro_context=False,  # 거시 환경은 서퍼 전략과 무관
     ),
@@ -181,8 +183,9 @@ AGENTS: dict[str, AgentConfig] = {
         score_weights={"technical": 0.3, "fundamental": 0.7},  # 성장 스토리 — 재무 우선, 기술 보조
         required_data=["price"],
         key_data=["revenue_growth", "recent_news", "pct_from_high", "technical_score"],
-        forbidden_topics=["단순 성장률 수치만으로 판단", "PBR 저평가", "배당", "안전마진"],
-        show_consensus=True,
+        forbidden_topics=["단순 성장률 수치만으로 판단", "PBR 저평가", "배당", "안전마진",
+                          "스토리만으로 매수 (매출·마진 데이터 없이 테마 스토리만 근거로 진입)"],
+        show_consensus=False,   # 탐색자는 개별 스토리 중심 — 타 에이전트 보유 현황 불필요
         show_mdd=False,         # 탐색자는 테마 감지 — MDD는 판단 흐림
         show_macro_context=False,  # 거시 환경보다 개별 스토리 중심
     ),
@@ -216,7 +219,8 @@ AGENTS: dict[str, AgentConfig] = {
         required_data=["price"],
         key_data=["vix", "fred", "regime", "sector_etf", "narrative",
                   "fear_greed", "hy_spread", "ig_spread"],
-        forbidden_topics=["긍정적 전망", "매수 기회", "성장 스토리", "ROIC", "PBR"],
+        forbidden_topics=["긍정적 전망", "매수 기회", "성장 스토리", "ROIC", "PBR",
+                          "조기 진입 (하락 신호가 아직 충분히 쌓이지 않았는데 '곧 하락할 것 같다'는 예측만으로 매수)"],
         show_consensus=False,   # 베어는 독립적 하락 판단 — 타 에이전트 영향 차단
         show_mdd=True,
         show_macro_context=True,

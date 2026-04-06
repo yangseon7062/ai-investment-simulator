@@ -364,6 +364,20 @@ async def generate_agent_decision(
         forbidden_lines = "\n".join(f"  - {t}" for t in forbidden_topics)
         forbidden_section = f"\n❌ 절대 언급·사용 금지 항목 (이 에이전트 전략과 무관):\n{forbidden_lines}\n"
 
+    # 매크로 전용: 구조화 시장 판단 출력 요구
+    macro_market_structure_rule = ""
+    if agent_config.agent_id == "macro":
+        macro_market_structure_rule = """
+📋 시장 판단 구조화 출력 규칙 (매크로 필수):
+report_md에 반드시 아래 섹션을 포함할 것:
+
+**[시장 상태]** risk-on / risk-off / 중립 중 하나 + 한 줄 이유
+**[유리한 전략]** 지금 시장에서 우위에 있는 접근법 (예: 방어 ETF, 현금 비중, 섹터 로테이션)
+**[피해야 할 행동]** 지금 하면 안 되는 구체적 행동 (예: 성장주 추격, 레버리지 진입)
+
+→ 이 3개가 없으면 리포트 미완성으로 간주.
+"""
+
     # 미래탐색자 전용: 뉴스 증가율 해석 지침
     explorer_news_trend_section = ""
     if agent_config.agent_id == "explorer":
@@ -432,7 +446,7 @@ async def generate_agent_decision(
 전략: {agent_config.strategy}
 투자 시간축: {agent_config.time_horizon}
 리포트 스타일: {agent_config.report_style}
-{macro_lens}{key_data_section}{forbidden_section}{explorer_news_trend_section}{news_usage_section}{strategist_data_rules}
+{macro_lens}{key_data_section}{forbidden_section}{macro_market_structure_rule}{explorer_news_trend_section}{news_usage_section}{strategist_data_rules}
 
 모든 판단은 한국어로 작성하세요.
 전문 용어 사용 시 반드시 괄호로 설명을 추가하세요. (예: PBR(주가순자산비율))
@@ -445,10 +459,16 @@ async def generate_agent_decision(
 
 📋 판단 구조 규칙:
 - hold(관망): 관심 종목이 있으나 아직 진입 조건 미충족 — 추후 재검토 예정
-- pass: 오늘 이 전략 기준으로 적합한 종목 자체가 없음 — 당분간 재검토 불필요"""
+- pass: 오늘 이 전략 기준으로 적합한 종목 자체가 없음 — 당분간 재검토 불필요
 
-    # Plan B: 모든 에이전트 — 임계값 초과 시 동적 경고 주입
-    warning_context = _build_market_warning_context(market_context)
+⚠️ pass 원칙 (매우 중요):
+- 후보 20개가 있어도 조건 미달이면 pass가 정답이다. 뭔가 골라야 한다는 압박을 느끼지 말 것.
+- "후보 중 그나마 나은 것"을 고르는 것은 금지. 전략 기준을 충족하는 종목이 없으면 pass.
+- 확신이 없으면 pass. 애매한 buy보다 명확한 pass가 훨씬 낫다."""
+
+    # Plan B: 거시 컨텍스트 허용 에이전트만 — 임계값 초과 시 동적 경고 주입
+    # show_macro_context=False(서퍼·탐색자)는 거시 경고도 차단 (독립성 유지)
+    warning_context = _build_market_warning_context(market_context) if agent_config.show_macro_context else ""
 
     # 거시 지표 변화율 (macro/bear/strategist 전용 — show_macro_context=True인 에이전트)
     macro_change_section = ""
@@ -469,11 +489,17 @@ async def generate_agent_decision(
     # 최근 손절 내역 섹션 (Task 3)
     loss_section = ""
     if recent_losses:
-        loss_lines = "\n".join(
-            f"- {l.get('ticker')} {l.get('pnl_pct', 0):+.1f}% ({l.get('created_at', '')[:10]})"
-            for l in recent_losses
+        loss_lines = []
+        for l in recent_losses:
+            line = f"- {l.get('ticker')} {l.get('pnl_pct', 0):+.1f}% ({l.get('created_at', '')[:10]})"
+            if l.get("failure_summary"):
+                line += f"\n  → 실패 요약: {l['failure_summary'][:150]}"
+            loss_lines.append(line)
+        loss_section = (
+            f"\n## 최근 30일 손절 내역 + 실패 유형 (반드시 참고)\n"
+            + "\n".join(loss_lines)
+            + "\n⚠️ 위와 같은 실패 패턴을 이번 판단에서 반복하지 말 것. 위 종목 재진입 시 신중하게 판단할 것.\n"
         )
-        loss_section = f"\n## 최근 30일 손절 내역 (경계 참고)\n{loss_lines}\n(위 종목 재진입 시 신중하게 판단할 것)\n"
 
     # extra_context 섹션 구성
     extra = extra_context or {}
@@ -526,9 +552,26 @@ async def generate_agent_decision(
             "thesis": thesis,
         })
 
-    # prices_60d는 raw 배열이라 LLM이 직접 해석 불가 → 제거
+    # 에이전트 전략과 무관한 heavy 필드 제거 (TPM 절약)
+    # prices_60d: 항상 제거 (raw 배열, LLM 해석 불가)
+    # 에이전트별 추가 제거:
+    #   surfer  → 재무·뉴스 계열 전부 (key_data가 기술 지표만)
+    #   bear    → 재무·뉴스 계열 전부 (인버스 ETF만, 개별 재무 불필요)
+    #   macro   → 재무·뉴스 계열 전부 (섹터 ETF만, 개별 재무 불필요)
+    _ALWAYS_STRIP = {"prices_60d"}
+    _FUNDAMENTAL_FIELDS = {
+        "recent_news", "financials_history", "pbr_band", "news_trend",
+        "roic", "pbr", "per", "revenue_growth", "gross_margin",
+        "fcf", "debt_ratio", "invested_capital", "operating_income",
+        "net_income", "total_assets", "revenue",
+    }
+    _STRIP_FUNDAMENTAL_AGENTS = {"surfer", "bear", "macro"}
+
     def _clean_candidate(c: dict) -> dict:
-        return {k: v for k, v in c.items() if k != "prices_60d"}
+        strip = set(_ALWAYS_STRIP)
+        if agent_config.agent_id in _STRIP_FUNDAMENTAL_AGENTS:
+            strip |= _FUNDAMENTAL_FIELDS
+        return {k: v for k, v in c.items() if k not in strip}
 
     cleaned_candidates = [_clean_candidate(c) for c in candidate_stocks[:20]]
 
@@ -546,7 +589,7 @@ gold 변화: {market_context.get('gold_change_pct', 0):+.1f}% | S&P500 변화: {
 {json.dumps(cleaned_candidates, ensure_ascii=False, indent=2)}
 
 ## 최근 30일 내 판단 기록
-{json.dumps(recent_logs[-10:], ensure_ascii=False, indent=2)}
+{json.dumps(recent_logs, ensure_ascii=False, indent=2)}
 
 ## 다른 에이전트 보유 현황 (중복 진입 참고용 — 판단은 독립적으로)
 {json.dumps(consensus_map or {}, ensure_ascii=False, indent=2)}
@@ -572,7 +615,7 @@ gold 변화: {market_context.get('gold_change_pct', 0):+.1f}% | S&P500 변화: {
   "next_condition": "다음에 언제 다시 판단할지 — 예: 'RSI 50 이하로 내려오면 재검토' / '다음 주 실적 발표 후 확인'",
   "risk_note": "이 판단이 틀릴 수 있는 이유 한 줄",
   "confidence": "low 또는 medium 또는 high",
-  "report_md": "## [{agent_config.name_kr}] 오늘의 판단\\n\\n**[결론]** buy/hold/pass\\n\\n**[이유]** 이 전략 기준 2~3개 근거만\\n\\n**[행동]** 지금 할 행동 구체적으로\\n\\n**[다음 조건]** 언제 다시 볼지\\n\\n**[리스크]** 틀릴 수 있는 이유",
+  "report_md": "## [{agent_config.name_kr}] 오늘의 판단\\n\\n**[결론]** buy/hold/pass\\n\\n**[이유]** 이 전략 기준 2~3개 근거만\\n\\n**[행동]** 지금 할 행동 구체적으로\\n\\n**[다음 조건]** 언제 다시 볼지\\n\\n**[리스크]** 틀릴 수 있는 이유\\n\\n**[후보 비교]** buy일 때만: 왜 이 종목이고 다른 상위 후보는 왜 탈락했는지 2~3개 간략 비교 (pass/hold면 생략)",
   "pass_reason": "pass/hold 선택 시 이유 (buy면 null)"
 }}
 """
@@ -629,8 +672,8 @@ async def monitor_position(
 경계 트리거: {agent_config.watch_trigger}
 리포트 스타일: {agent_config.report_style}{earnings_test_note}"""
 
-    # Plan B: 동적 경고 주입
-    warning_context = _build_market_warning_context(market_context)
+    # Plan B: 거시 컨텍스트 허용 에이전트만 경고 주입 (서퍼·탐색자 차단)
+    warning_context = _build_market_warning_context(market_context) if agent_config.show_macro_context else ""
 
     pnl_pct = (current_price - position["price"]) / position["price"] * 100
 

@@ -222,10 +222,12 @@ async def _update_financials_cache(us_tickers: list, kr_tickers: list):
         except Exception:
             pass
 
-    # KR 재무 수집 (yfinance, 종목코드.KS)
+    # KR 재무 수집 (yfinance, KOSPI 우선 → KOSDAQ 폴백)
     async def _save_kr(ticker):
         try:
-            data = await get_us_financials(ticker + ".KS")  # yfinance KR 형식
+            data = await get_us_financials(ticker + ".KS")
+            if not data:
+                data = await get_us_financials(ticker + ".KQ")  # KOSDAQ 폴백
             if not data:
                 return
             async with get_db() as conn:
@@ -289,7 +291,10 @@ async def run_scoring_engine():
             continue
 
         prices = price_data.get("prices_60d", [])
-        volumes = [price_data.get("volume", 0)] * len(prices)
+        # avg_volume_20d 기준으로 과거 볼륨 배열 구성 후 오늘 실제 거래량 마지막에 삽입
+        avg_vol = price_data.get("avg_volume_20d", price_data.get("volume", 0))
+        today_vol = price_data.get("volume", 0)
+        volumes = [avg_vol] * (len(prices) - 1) + [today_vol]
 
         tech = calc_technical_score(prices, volumes)
         fund = await calc_fundamental_score(ticker, "KR")
@@ -415,7 +420,7 @@ async def get_top_stocks(agent_id: str, market: str, top_n: int = 30) -> list[di
     from backend.agents.definitions import AGENTS as AGENT_DEFS
     agent_def = AGENT_DEFS.get(agent_id)
     weights = agent_def.score_weights if agent_def and agent_def.score_weights \
-        else {"technical": 0.4, "fundamental": 0.4, "sentiment": 0.2}
+        else {"technical": 0.5, "fundamental": 0.5}
     today = date.today()
 
     async with get_db() as conn:
