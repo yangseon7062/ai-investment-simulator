@@ -566,11 +566,20 @@ report_md에 반드시 아래 섹션을 포함할 것:
         "net_income", "total_assets", "revenue",
     }
     _STRIP_FUNDAMENTAL_AGENTS = {"surfer", "bear", "macro"}
+    # 전략가·탐색자: raw 재무제표는 제거, 파생 지표(roic/pbr/per 등)만 유지
+    _RAW_FINANCIALS = {
+        "revenue", "operating_income", "net_income",
+        "total_assets", "invested_capital",
+        "financials_history", "pbr_band", "news_trend",
+    }
+    _STRIP_RAW_AGENTS = {"strategist", "explorer"}
 
     def _clean_candidate(c: dict) -> dict:
         strip = set(_ALWAYS_STRIP)
         if agent_config.agent_id in _STRIP_FUNDAMENTAL_AGENTS:
             strip |= _FUNDAMENTAL_FIELDS
+        if agent_config.agent_id in _STRIP_RAW_AGENTS:
+            strip |= _RAW_FINANCIALS
         return {k: v for k, v in c.items() if k not in strip}
 
     cleaned_candidates = [_clean_candidate(c) for c in candidate_stocks[:20]]
