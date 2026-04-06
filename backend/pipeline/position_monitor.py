@@ -195,11 +195,16 @@ async def check_sector_concentration() -> list[dict]:
         for sector, cnt in sectors.items():
             pct = cnt / total * 100
             if pct >= 60:
+                _name_map = {
+                    "macro": "매크로", "strategist": "전략가",
+                    "surfer": "서퍼", "explorer": "미래탐색자", "bear": "베어",
+                }
+                name_kr = _name_map.get(agent_id, agent_id)
                 warnings.append({
                     "agent_id": agent_id,
                     "sector": sector,
                     "pct": round(pct, 1),
-                    "msg": f"{agent_id}: {sector} {pct:.0f}% 집중",
+                    "msg": f"{name_kr}: {sector} {pct:.0f}% 집중",
                 })
 
     if warnings:
