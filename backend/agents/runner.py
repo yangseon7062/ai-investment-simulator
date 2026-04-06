@@ -926,8 +926,8 @@ async def save_portfolio_snapshots():
 
         async with get_db() as conn:
             prev_row = await conn.fetchrow(
-                "SELECT total_value_krw FROM portfolio_snapshots WHERE agent_id = $1 ORDER BY snapshot_date DESC LIMIT 1",
-                agent_id,
+                "SELECT total_value_krw FROM portfolio_snapshots WHERE agent_id = $1 AND snapshot_date < $2 ORDER BY snapshot_date DESC LIMIT 1",
+                agent_id, today,
             )
 
         prev_return = float(prev_row["total_value_krw"]) if prev_row and prev_row["total_value_krw"] is not None else 0.0
