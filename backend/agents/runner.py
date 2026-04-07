@@ -261,7 +261,7 @@ async def run_single_agent(agent_config, market_context: dict) -> dict:
 
     # 후보 종목 추가 정보 수집 (뉴스 + 수급 + 52주 고저)
     # volume_spike 종목 포함하여 전체 후보에서 뉴스 수집 (top5 제한 제거)
-    from backend.services.news_fetcher import fetch_naver_stock_news, get_news_trend
+    from backend.services.news_fetcher import fetch_naver_stock_news, get_news_trend, save_news_to_db
     from backend.services.data_fetcher import get_yfinance_news, get_foreign_buying, get_52week_high_low
 
     kr_all = [(c["ticker"], c.get("name", c["ticker"])) for c in candidates if c.get("market") == "KR"]
@@ -282,6 +282,19 @@ async def run_single_agent(agent_config, market_context: dict) -> dict:
         for c in candidates:
             if c.get("market") == "KR" and c["ticker"] in kr_news_map:
                 c["recent_news"] = [n["title"] for n in kr_news_map[c["ticker"]][:3]]
+        # DB 저장 (뉴스 증가율 집계용)
+        all_kr_news = []
+        for (ticker, _), result in zip(kr_all, kr_news_results):
+            if isinstance(result, list):
+                for n in result:
+                    n["ticker"] = ticker
+                    n["market"] = "KR"
+                all_kr_news.extend(result)
+        if all_kr_news:
+            try:
+                await save_news_to_db(all_kr_news)
+            except Exception as _e:
+                pass
     if isinstance(us_news_map, dict):
         for c in candidates:
             if c.get("market") == "US" and c["ticker"] in us_news_map:

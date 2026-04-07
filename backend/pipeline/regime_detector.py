@@ -21,7 +21,11 @@ async def run_regime_detection() -> dict:
         "SELECT * FROM market_snapshots WHERE snapshot_date = $1", (today,)
     )
     if existing:
-        return existing
+        # macro_data가 실제로 채워진 경우만 early return (06:30 빈 행 방지)
+        macro_raw = existing.get("macro_data", "{}")
+        macro_check = json.loads(macro_raw) if isinstance(macro_raw, str) else (macro_raw or {})
+        if macro_check.get("vix") is not None:
+            return existing
 
     loop = asyncio.get_event_loop()
     vix, fear_greed, fred_data, sector_etfs, gold_signal, macro_changes = await asyncio.gather(

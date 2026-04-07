@@ -17,9 +17,14 @@ from backend.database import execute as db_execute, fetchall
 
 RSS_FEEDS = {
     "연합인포맥스": "https://www.einfomax.co.kr/rss/allnews.xml",
-    "Reuters_KR":   "https://kr.reuters.com/news/rss",
     "한국은행":      "https://www.bok.or.kr/portal/bbs/P0002398/list.do?menuNo=200690&pageIndex=1&searchCnd=1&searchWrd=",
     "Fed":          "https://www.federalreserve.gov/feeds/press_all.xml",
+    # 지정학/국제/시장 이슈 (매크로·베어 에이전트용)
+    "BBC_World":    "http://feeds.bbci.co.uk/news/world/rss.xml",
+    "BBC_Business": "http://feeds.bbci.co.uk/news/business/rss.xml",
+    "FT_World":     "https://www.ft.com/world?format=rss",
+    "CNBC_Markets": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114",
+    "CNBC_World":   "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100727362",
 }
 
 

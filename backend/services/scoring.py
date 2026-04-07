@@ -222,26 +222,100 @@ async def _update_financials_cache(us_tickers: list, kr_tickers: list):
         except Exception:
             pass
 
-    # KR 재무 수집 (yfinance, KOSPI 우선 → KOSDAQ 폴백)
+    # KR 재무 수집 (yfinance .KS/.KQ + pykrx PBR/PER 보완)
+    # pykrx 기본 지표 배치 수집 (PBR/PER — 날짜 기준)
+    import yfinance as yf
+    from datetime import datetime as _dt
+    loop = asyncio.get_event_loop()
+    kr_date = _dt.now().strftime("%Y%m%d")
+
+    def _fetch_kr_fundamental(tickers_list):
+        """pykrx get_market_fundamental_by_ticker — PBR/PER 일괄 수집"""
+        try:
+            from pykrx import stock as krx
+            df = krx.get_market_fundamental_by_ticker(kr_date)
+            result = {}
+            for t in tickers_list:
+                if t in df.index:
+                    row = df.loc[t]
+                    pbr = float(row["PBR"]) if row.get("PBR") and row["PBR"] > 0 else None
+                    per = float(row["PER"]) if row.get("PER") and row["PER"] > 0 else None
+                    result[t] = {"pbr": pbr, "per": per}
+            return result
+        except Exception:
+            return {}
+
+    kr_fundamental_map = await loop.run_in_executor(None, _fetch_kr_fundamental, to_fetch_kr)
+
+    # FDR Marcap 배치 수집 (PER fallback용 — KR 종목 시가총액)
+    def _fetch_fdr_marcap():
+        try:
+            import FinanceDataReader as fdr
+            kospi = fdr.StockListing("KOSPI")[["Code", "Marcap"]].set_index("Code")
+            kosdaq = fdr.StockListing("KOSDAQ")[["Code", "Marcap"]].set_index("Code")
+            import pandas as pd
+            combined = pd.concat([kospi, kosdaq])
+            return combined["Marcap"].to_dict()
+        except Exception:
+            return {}
+
+    fdr_marcap = await loop.run_in_executor(None, _fetch_fdr_marcap)
+
     async def _save_kr(ticker):
         try:
             data = await get_us_financials(ticker + ".KS")
             if not data:
                 data = await get_us_financials(ticker + ".KQ")  # KOSDAQ 폴백
             if not data:
+                data = {}
+
+            # pykrx PBR/PER로 보완 (yfinance가 None 반환하는 경우)
+            pykrx_vals = kr_fundamental_map.get(ticker, {})
+            pbr = data.get("pbr") or pykrx_vals.get("pbr")
+            per = data.get("per") or pykrx_vals.get("per")
+
+            # PER fallback: FDR Marcap / (분기순이익 × 4) — yfinance marketCap None인 KR 종목
+            if per is None and data.get("net_income") is not None:
+                try:
+                    marcap = fdr_marcap.get(ticker)
+                    net_income = data.get("net_income")
+                    if marcap and net_income and net_income > 0:
+                        per = round(marcap / (net_income * 4), 2)
+                except Exception:
+                    pass
+
+            # PBR fallback: FDR Marcap / 자기자본 — yfinance priceToBook None인 KR 종목
+            if pbr is None and data.get("stockholders_equity") is not None:
+                try:
+                    marcap = fdr_marcap.get(ticker)
+                    equity = data.get("stockholders_equity")
+                    if marcap and equity and equity > 0:
+                        pbr = round(marcap / equity, 2)
+                except Exception:
+                    pass
+
+            # 재무 데이터가 전혀 없으면 PBR/PER만이라도 저장
+            if not data and pbr is None and per is None:
                 return
+
             async with get_db() as conn:
                 await conn.execute(
                     """INSERT INTO financials_cache
                        (ticker, market, fiscal_quarter, revenue, operating_income, net_income,
-                        total_assets, invested_capital, roic, pbr, per, revenue_growth)
-                       VALUES ($1,'KR',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+                        total_assets, invested_capital, roic, pbr, per, revenue_growth,
+                        gross_margin, fcf, debt_ratio)
+                       VALUES ($1,'KR',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
                        ON CONFLICT (ticker, market, fiscal_quarter) DO UPDATE SET
                          roic=EXCLUDED.roic, pbr=EXCLUDED.pbr, per=EXCLUDED.per,
-                         revenue_growth=EXCLUDED.revenue_growth, updated_at=NOW()""",
-                    ticker, quarter, data.get("revenue"), data.get("operating_income"),
+                         revenue_growth=EXCLUDED.revenue_growth,
+                         gross_margin=EXCLUDED.gross_margin,
+                         fcf=EXCLUDED.fcf, debt_ratio=EXCLUDED.debt_ratio,
+                         updated_at=NOW()""",
+                    ticker, quarter,
+                    data.get("revenue"), data.get("operating_income"),
                     data.get("net_income"), data.get("total_assets"), data.get("invested_capital"),
-                    data.get("roic"), data.get("pbr"), data.get("per"), data.get("revenue_growth"),
+                    data.get("roic"), pbr, per, data.get("revenue_growth"),
+                    data.get("gross_margin"), data.get("fcf"), data.get("debt_ratio"),
                 )
         except Exception:
             pass
@@ -283,9 +357,87 @@ async def _update_daily_valuation(us_tickers: list, kr_tickers: list):
         except Exception:
             pass
 
+    # KR PBR/PER — pykrx 일괄 수집 (yfinance .KS보다 훨씬 안정적)
+    from datetime import datetime as _dt2
+    kr_date2 = _dt2.now().strftime("%Y%m%d")
+
+    def _fetch_kr_pbr_per():
+        try:
+            from pykrx import stock as krx
+            return krx.get_market_fundamental_by_ticker(kr_date2)
+        except Exception:
+            return None
+
+    kr_fund_df = await loop.run_in_executor(None, _fetch_kr_pbr_per)
+
+    # FDR Marcap 배치 수집 (PER fallback용)
+    def _fetch_fdr_marcap_daily():
+        try:
+            import FinanceDataReader as fdr
+            import pandas as pd
+            kospi = fdr.StockListing("KOSPI")[["Code", "Marcap"]].set_index("Code")
+            kosdaq = fdr.StockListing("KOSDAQ")[["Code", "Marcap"]].set_index("Code")
+            return pd.concat([kospi, kosdaq])["Marcap"].to_dict()
+        except Exception:
+            return {}
+
+    # PER/PBR NULL인 KR 종목만 fallback 대상으로 추출
+    async with get_db() as conn:
+        kr_missing = await conn.fetch(
+            """SELECT ticker, net_income, invested_capital FROM financials_cache
+               WHERE market='KR' AND fiscal_quarter=$1 AND (per IS NULL OR pbr IS NULL)""",
+            quarter
+        )
+    kr_missing_map = {r["ticker"]: {"net_income": r["net_income"], "invested_capital": r["invested_capital"]} for r in kr_missing}
+
+    fdr_marcap_daily, = await asyncio.gather(
+        loop.run_in_executor(None, _fetch_fdr_marcap_daily)
+    )
+
+    async def _update_kr(ticker):
+        try:
+            pbr, per = None, None
+            # pykrx 우선 (KRX API 유효 시)
+            if kr_fund_df is not None and ticker in kr_fund_df.index:
+                row = kr_fund_df.loc[ticker]
+                pbr = float(row["PBR"]) if row.get("PBR") and float(row["PBR"]) > 0 else None
+                per = float(row["PER"]) if row.get("PER") and float(row["PER"]) > 0 else None
+
+            # FDR Marcap fallback — PER/PBR NULL 종목만
+            if (per is None or pbr is None) and ticker in kr_missing_map:
+                marcap = fdr_marcap_daily.get(ticker)
+                if marcap:
+                    vals = kr_missing_map[ticker]
+                    # PER: Marcap / (분기순이익 × 4)
+                    if per is None:
+                        ni = vals.get("net_income")
+                        if ni and ni > 0:
+                            per = round(marcap / (ni * 4), 2)
+                    # PBR: Marcap / 자기자본 — yfinance에서 재조회 필요
+                    if pbr is None:
+                        try:
+                            data = await get_us_financials(ticker + ".KS") or await get_us_financials(ticker + ".KQ")
+                            equity = data.get("stockholders_equity") if data else None
+                            if equity and equity > 0:
+                                pbr = round(marcap / equity, 2)
+                        except Exception:
+                            pass
+
+            if pbr is None and per is None:
+                return
+            async with get_db() as conn:
+                await conn.execute(
+                    """UPDATE financials_cache
+                       SET pbr=$1, per=$2, updated_at=NOW()
+                       WHERE ticker=$3 AND market='KR' AND fiscal_quarter=$4""",
+                    pbr, per, ticker, quarter,
+                )
+        except Exception:
+            pass
+
     tasks = (
         [_update(t, t, "US") for t in us_tickers] +
-        [_update(t, t + ".KS", "KR") for t in kr_tickers]
+        [_update_kr(t) for t in kr_tickers]
     )
     await asyncio.gather(*tasks, return_exceptions=True)
     print(f"  PBR/PER 일별 갱신: US {len(us_tickers)}개 + KR {len(kr_tickers)}개")

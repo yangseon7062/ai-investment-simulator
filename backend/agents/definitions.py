@@ -151,7 +151,9 @@ AGENTS: dict[str, AgentConfig] = {
         # recent_news는 key_data에서 제외 — 뉴스는 보조 확인용, 판단 근거로 사용 금지
         forbidden_topics=["기업 성장성", "ROIC", "PBR", "PER", "매출성장률", "장기 전망",
                           "뉴스 내용을 매수 근거로 사용",
-                          "급등한 종목을 뒤늦게 추격 (이미 오른 종목을 '아직 더 오를 것'이라는 이유로 진입)"],
+                          "급등한 종목을 뒤늦게 추격 (이미 오른 종목을 '아직 더 오를 것'이라는 이유로 진입)",
+                          "수급 데이터(외국인/기관) 없음을 pass 이유로 사용 — 수급은 보조 참고용이며 없어도 기술 스코어로 판단 가능",
+                          "수급 데이터를 '다음 조건'에 포함 — 수급은 조건이 아님"],
         show_consensus=False,   # 서퍼는 단기 모멘텀 — 타 에이전트 보유 현황 불필요
         show_mdd=False,         # 서퍼는 단기 타이밍 — MDD는 판단 흐림
         show_macro_context=False,  # 거시 환경은 서퍼 전략과 무관
@@ -184,7 +186,9 @@ AGENTS: dict[str, AgentConfig] = {
         required_data=["price"],
         key_data=["revenue_growth", "recent_news", "pct_from_high", "technical_score"],
         forbidden_topics=["단순 성장률 수치만으로 판단", "PBR 저평가", "배당", "안전마진",
-                          "스토리만으로 매수 (매출·마진 데이터 없이 테마 스토리만 근거로 진입)"],
+                          "스토리만으로 매수 (매출·마진 데이터 없이 테마 스토리만 근거로 진입)",
+                          "recent_news 없음을 pass 이유로 사용 — 뉴스는 보조 참고용, 매출·마진·성장률로 판단 가능",
+                          "news_trend 없음을 pass 이유로 사용 — 재무 성장 데이터로 대체 판단 가능"],
         show_consensus=False,   # 탐색자는 개별 스토리 중심 — 타 에이전트 보유 현황 불필요
         show_mdd=False,         # 탐색자는 테마 감지 — MDD는 판단 흐림
         show_macro_context=False,  # 거시 환경보다 개별 스토리 중심

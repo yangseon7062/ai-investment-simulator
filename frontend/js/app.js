@@ -716,6 +716,94 @@ function goToStock(ticker) {
   searchStock();
 }
 
+// ── 온디맨드 종목 분석 ─────────────────────────────────────────
+const AGENT_NAME_KR = {
+  macro: '매크로', strategist: '전략가',
+  surfer: '서퍼', explorer: '미래탐색자', bear: '베어',
+};
+const DECISION_LABEL = { buy: '매수', hold: '관망', pass: '패스' };
+const DECISION_COLOR = { buy: '#22c55e', hold: '#f59e0b', pass: '#6b7280' };
+
+async function runAnalyze() {
+  const ticker = document.getElementById('analyze-ticker').value.trim().toUpperCase();
+  const market = document.getElementById('analyze-market').value;
+  if (!ticker) { alert('종목 코드를 입력하세요'); return; }
+
+  const checked = [...document.querySelectorAll('.analyze-agent-chk:checked')].map(el => el.value);
+
+  const btn = document.getElementById('analyze-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="material-symbols-outlined animate-spin text-base">progress_activity</span>분석 중…';
+
+  const resultEl = document.getElementById('analyze-result');
+  const headerEl = document.getElementById('analyze-header');
+  const cardsEl  = document.getElementById('analyze-cards');
+  resultEl.classList.add('hidden');
+  cardsEl.innerHTML = '';
+
+  try {
+    // 온디맨드 분석은 에이전트 수 × 10초 + LLM 처리 시간 → 타임아웃 5분
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 300000);
+    let data;
+    try {
+      const r = await fetch('/api/analyze/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticker, market, agents: checked }),
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+      data = await r.json();
+    } catch (fetchErr) {
+      clearTimeout(timer);
+      throw fetchErr;
+    }
+
+    const agentIds = Object.keys(data.results);
+    headerEl.innerHTML = `
+      <span class="font-semibold text-white">${data.name} (${ticker})</span>
+      <span class="text-gray-600 mx-2">|</span>
+      현재가 ${data.price ? data.price.toLocaleString() : '-'}
+      <span class="text-gray-600 mx-2">|</span>
+      ${agentIds.length}개 에이전트 분석 완료`;
+
+    cardsEl.innerHTML = agentIds.map(agentId => {
+      const r = data.results[agentId];
+      const decision = r.decision || 'pass';
+      const color = DECISION_COLOR[decision] || '#6b7280';
+      const label = DECISION_LABEL[decision] || decision;
+      const confidence = r.confidence || '';
+      const confBadge = confidence
+        ? `<span class="text-xs px-2 py-0.5 rounded-full bg-white/10 text-gray-400">${{ low:'낮음', medium:'보통', high:'높음' }[confidence] || confidence}</span>`
+        : '';
+      const reportHtml = r.report_md ? renderMarkdown(r.report_md) : '<p class="text-gray-600">리포트 없음</p>';
+
+      return `
+        <div class="bg-[#0f1117] border border-[#2a2f3e] rounded-2xl overflow-hidden">
+          <div class="px-5 py-4 border-b border-[#2a2f3e] flex items-center justify-between">
+            <span class="font-bold text-white text-sm">${AGENT_NAME_KR[agentId] || agentId}</span>
+            <div class="flex items-center gap-2">
+              ${confBadge}
+              <span class="text-sm font-bold" style="color:${color}">${label}</span>
+            </div>
+          </div>
+          <div class="px-5 py-4 prose prose-invert prose-sm max-w-none text-gray-400 text-xs leading-relaxed">
+            ${reportHtml}
+          </div>
+        </div>`;
+    }).join('');
+
+    resultEl.classList.remove('hidden');
+  } catch (e) {
+    alert('분석 실패: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<span class="material-symbols-outlined text-base">search</span>분석 실행';
+  }
+}
+
 // ── Page: 데이터현황 ───────────────────────────────────────────
 async function loadDataStatus() {
   const [summary, sectors] = await Promise.all([

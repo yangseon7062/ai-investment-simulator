@@ -297,16 +297,79 @@
   ══════════════════════════════════════════════════════════ -->
   <div id="page-stocks" class="page">
     <div class="p-8 space-y-6">
-      <div class="flex gap-3">
-        <input id="stock-search" type="text" placeholder="종목 코드 입력 (예: 005930, NVDA)"
-               class="bg-card border border-[#2a2f3e] rounded-xl px-4 py-3 text-sm text-gray-300 w-80 outline-none focus:ring-1 focus:ring-primary placeholder-gray-600"
-               onkeydown="if(event.key==='Enter') searchStock()"/>
-        <button onclick="searchStock()"
-                class="bg-primary text-white rounded-xl px-6 py-3 text-sm font-semibold hover:opacity-90 transition-opacity">
-          조회
+
+      <!-- 온디맨드 분석 패널 -->
+      <div class="bg-card border border-[#2a2f3e] rounded-2xl p-6 space-y-5">
+        <h3 class="text-base font-bold text-white flex items-center gap-2">
+          <span class="material-symbols-outlined text-primary">analytics</span>종목 즉석 분석
+        </h3>
+
+        <!-- 입력 행 -->
+        <div class="flex flex-wrap gap-3 items-center">
+          <input id="analyze-ticker" type="text" placeholder="종목 코드 (예: 005930, NVDA)"
+                 class="bg-[#0f1117] border border-[#2a2f3e] rounded-xl px-4 py-2.5 text-sm text-gray-300 w-56 outline-none focus:ring-1 focus:ring-primary placeholder-gray-600"
+                 onkeydown="if(event.key==='Enter') runAnalyze()"/>
+          <select id="analyze-market"
+                  class="bg-[#0f1117] border border-[#2a2f3e] rounded-xl px-4 py-2.5 text-sm text-gray-300 outline-none focus:ring-1 focus:ring-primary">
+            <option value="KR">KR (국내)</option>
+            <option value="US">US (미국)</option>
+          </select>
+        </div>
+
+        <!-- 에이전트 선택 -->
+        <div class="space-y-2">
+          <p class="text-xs text-gray-500 uppercase tracking-wider">에이전트 선택 (미선택 시 전체)</p>
+          <div class="flex flex-wrap gap-3">
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" value="macro" class="analyze-agent-chk accent-primary w-4 h-4"/>
+              <span class="text-sm text-gray-300">매크로</span>
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" value="strategist" class="analyze-agent-chk accent-primary w-4 h-4"/>
+              <span class="text-sm text-gray-300">전략가</span>
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" value="surfer" class="analyze-agent-chk accent-primary w-4 h-4"/>
+              <span class="text-sm text-gray-300">서퍼</span>
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" value="explorer" class="analyze-agent-chk accent-primary w-4 h-4"/>
+              <span class="text-sm text-gray-300">미래탐색자</span>
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" value="bear" class="analyze-agent-chk accent-primary w-4 h-4"/>
+              <span class="text-sm text-gray-300">베어</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- 실행 버튼 -->
+        <button id="analyze-btn" onclick="runAnalyze()"
+                class="bg-primary text-white rounded-xl px-6 py-2.5 text-sm font-semibold hover:opacity-90 transition-opacity flex items-center gap-2">
+          <span class="material-symbols-outlined text-base">search</span>분석 실행
         </button>
       </div>
-      <div id="stock-matrix"></div>
+
+      <!-- 분석 결과 -->
+      <div id="analyze-result" class="space-y-4 hidden">
+        <div id="analyze-header" class="text-sm text-gray-400"></div>
+        <div id="analyze-cards" class="grid grid-cols-1 lg:grid-cols-2 gap-4"></div>
+      </div>
+
+      <!-- 기존 에이전트 스탠스 매트릭스 -->
+      <div class="space-y-3">
+        <div class="flex gap-3">
+          <input id="stock-search" type="text" placeholder="보유 종목 스탠스 조회 (예: 005930)"
+                 class="bg-[#0f1117] border border-[#2a2f3e] rounded-xl px-4 py-2.5 text-sm text-gray-300 w-64 outline-none focus:ring-1 focus:ring-primary placeholder-gray-600"
+                 onkeydown="if(event.key==='Enter') searchStock()"/>
+          <button onclick="searchStock()"
+                  class="bg-[#1e2435] text-gray-300 rounded-xl px-5 py-2.5 text-sm font-semibold hover:bg-[#252b3d] transition-colors">
+            스탠스 조회
+          </button>
+        </div>
+        <div id="stock-matrix"></div>
+      </div>
+
     </div>
   </div>
 

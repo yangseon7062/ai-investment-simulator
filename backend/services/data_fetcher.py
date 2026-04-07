@@ -80,6 +80,9 @@ def get_fred_indicators() -> dict:
                     result[key] = float(series.iloc[-1])
             except Exception:
                 pass
+        # 10Y-2Y 스프레드 계산
+        if "10Y_YIELD" in result and "2Y_YIELD" in result:
+            result["T10Y2Y"] = round(result["10Y_YIELD"] - result["2Y_YIELD"], 4)
         return result
     except Exception:
         return {}
@@ -138,59 +141,61 @@ async def get_us_prices(tickers: list[str]) -> dict:
 
 # ── 국내 종목 시세 ──────────────────────────────────────────────────
 async def get_kr_prices(tickers: list[str]) -> dict:
-    """국내 종목 전일 종가 (pykrx)"""
+    """국내 종목 전일 종가 (yfinance .KS/.KQ — pykrx KRX API 변경으로 대체)"""
     loop = asyncio.get_event_loop()
 
     def _fetch():
+        result = {}
+        # yfinance 배치 다운로드 (.KS 시도 → 결과 없으면 .KQ)
+        ks_tickers = [t + ".KS" for t in tickers]
         try:
-            from pykrx import stock as krx
-            result = {}
-            today = datetime.now().strftime("%Y%m%d")
-            start = (datetime.now() - timedelta(days=90)).strftime("%Y%m%d")
-            for ticker in tickers:
+            data = yf.download(ks_tickers, period="90d", auto_adjust=True, progress=False, timeout=30)
+            close = data["Close"] if isinstance(data.columns, pd.MultiIndex) else data
+            volume = data["Volume"] if isinstance(data.columns, pd.MultiIndex) else None
+            open_df = data["Open"] if isinstance(data.columns, pd.MultiIndex) else None
+
+            for ticker, ks in zip(tickers, ks_tickers):
                 try:
-                    df = krx.get_market_ohlcv(start, today, ticker)
-                    if df.empty:
+                    prices = close[ks].dropna() if ks in close.columns else pd.Series()
+                    if len(prices) < 2:
                         continue
-                    prices = df["종가"].dropna()
-                    vols = df["거래량"].dropna()
-                    # gap % = (당일 시가 - 전일 종가) / 전일 종가 * 100
+                    vols = volume[ks].dropna() if volume is not None and ks in volume.columns else pd.Series()
+                    opens = open_df[ks].dropna() if open_df is not None and ks in open_df.columns else pd.Series()
+
                     gap_pct = None
-                    try:
-                        opens = df["시가"].dropna()
-                        if len(opens) > 1 and len(prices) > 1:
-                            today_open = float(opens.iloc[-1])
-                            prev_close = float(prices.iloc[-2])
-                            if prev_close > 0:
-                                gap_pct = round((today_open - prev_close) / prev_close * 100, 2)
-                    except Exception:
-                        pass
+                    if len(opens) > 1 and len(prices) > 1:
+                        today_open = float(opens.iloc[-1])
+                        prev_close = float(prices.iloc[-2])
+                        if prev_close > 0:
+                            gap_pct = round((today_open - prev_close) / prev_close * 100, 2)
+
                     result[ticker] = {
                         "price": float(prices.iloc[-1]),
-                        "prev_price": float(prices.iloc[-2]) if len(prices) > 1 else float(prices.iloc[-1]),
-                        "change_pct": float((prices.iloc[-1] - prices.iloc[-2]) / prices.iloc[-2] * 100) if len(prices) > 1 else 0.0,
-                        "volume": float(vols.iloc[-1]),
-                        "avg_volume_20d": float(vols.iloc[-20:].mean()),
+                        "prev_price": float(prices.iloc[-2]),
+                        "change_pct": float((prices.iloc[-1] - prices.iloc[-2]) / prices.iloc[-2] * 100),
+                        "volume": float(vols.iloc[-1]) if len(vols) > 0 else 0.0,
+                        "avg_volume_20d": float(vols.iloc[-20:].mean()) if len(vols) >= 20 else float(vols.mean()) if len(vols) > 0 else 0.0,
                         "prices_60d": prices.tolist(),
                         "gap_pct": gap_pct,
                     }
                 except Exception:
                     pass
-            return result
-        except ImportError:
-            return {}
+        except Exception:
+            pass
+        return result
 
     return await loop.run_in_executor(None, _fetch)
 
 
 # ── 외국인 수급 ────────────────────────────────────────────────────
 async def get_foreign_buying(tickers: list[str]) -> dict:
-    """pykrx 외국인+기관 순매수 (최근 3일)"""
+    """pykrx 외국인+기관 순매수 (최근 3일) — KRX API 불안정 시 빈 dict 반환"""
     loop = asyncio.get_event_loop()
 
     def _fetch():
         try:
             from pykrx import stock as krx
+            import signal as _signal
             result = {}
             today = datetime.now().strftime("%Y%m%d")
             start = (datetime.now() - timedelta(days=7)).strftime("%Y%m%d")
@@ -199,21 +204,27 @@ async def get_foreign_buying(tickers: list[str]) -> dict:
                     df = krx.get_market_trading_value_by_investor(start, today, ticker)
                     if df.empty:
                         continue
-                    # 최근 3일 합산
                     recent = df.tail(3)
-                    foreign_net = float(recent["외국인합계"].sum()) if "외국인합계" in recent else 0.0
-                    inst_net = float(recent["기관합계"].sum()) if "기관합계" in recent else 0.0
+                    foreign_net = float(recent["외국인합계"].sum()) if "외국인합계" in recent.columns else 0.0
+                    inst_net = float(recent["기관합계"].sum()) if "기관합계" in recent.columns else 0.0
                     result[ticker] = {
-                        "foreign_net_3d": round(foreign_net / 1e8, 2),  # 억원
-                        "institution_net_3d": round(inst_net / 1e8, 2),  # 억원
+                        "foreign_net_3d": round(foreign_net / 1e8, 2),
+                        "institution_net_3d": round(inst_net / 1e8, 2),
                     }
                 except Exception:
                     pass
             return result
-        except ImportError:
+        except Exception:
             return {}
 
-    return await loop.run_in_executor(None, _fetch)
+    try:
+        return await asyncio.wait_for(
+            loop.run_in_executor(None, _fetch),
+            timeout=30.0  # 30초 타임아웃 — pykrx 무한대기 방지
+        )
+    except asyncio.TimeoutError:
+        print("  [수급] pykrx 타임아웃 — 수급 데이터 skip")
+        return {}
 
 
 
@@ -228,33 +239,37 @@ async def get_52week_high_low(tickers: list[str], market: str) -> dict:
                 if market == "US":
                     suffixes = [ticker]
                 else:
-                    # KOSPI 우선 시도, 실패 시 KOSDAQ(.KQ) 폴백
                     suffixes = [ticker + ".KS", ticker + ".KQ"]
 
-                info = None
+                hist = None
                 for sym in suffixes:
                     try:
-                        _info = yf.Ticker(sym).fast_info
-                        if getattr(_info, "fifty_two_week_high", None):
-                            info = _info
+                        _hist = yf.Ticker(sym).history(period="1y")
+                        if not _hist.empty:
+                            hist = _hist
                             break
                     except Exception:
                         continue
 
-                if info is None:
+                if hist is None or hist.empty:
                     continue
 
-                high52 = getattr(info, "fifty_two_week_high", None)
-                low52 = getattr(info, "fifty_two_week_low", None)
-                current = getattr(info, "last_price", None)
+                prices = hist["Close"].dropna()
+                if len(prices) < 20:
+                    continue
+
+                high52 = float(prices.max())
+                low52 = float(prices.min())
+                current = float(prices.iloc[-1])
+
                 if high52 and low52 and current:
                     pct_from_high = round((current - high52) / high52 * 100, 1)
                     pct_from_low = round((current - low52) / low52 * 100, 1)
                     result[ticker] = {
                         "high_52w": high52,
                         "low_52w": low52,
-                        "pct_from_high": pct_from_high,  # 음수 = 고점 대비 하락
-                        "pct_from_low": pct_from_low,    # 양수 = 저점 대비 상승
+                        "pct_from_high": pct_from_high,
+                        "pct_from_low": pct_from_low,
                     }
             except Exception:
                 pass
@@ -350,7 +365,18 @@ async def get_us_financials(ticker: str) -> Optional[dict]:
 
             info = t.info
             pbr = info.get("priceToBook")
-            per = info.get("trailingPE")
+            per = info.get("trailingPE") or info.get("forwardPE")
+
+            # PER fallback: marketCap / TTM 순이익 (yfinance가 trailingPE 미반환 시 — KR 종목에서 빈번)
+            if per is None and "Net Income" in income.index:
+                try:
+                    market_cap = info.get("marketCap")
+                    ttm_cols = min(4, len(income.columns))
+                    net_income_ttm = float(income.loc["Net Income"].iloc[:ttm_cols].sum())
+                    if market_cap and net_income_ttm and net_income_ttm > 0:
+                        per = round(market_cap / net_income_ttm, 2)
+                except Exception:
+                    pass
 
             # 매출 성장률 (전년 동기 대비)
             revenue_growth = None
@@ -391,6 +417,7 @@ async def get_us_financials(ticker: str) -> Optional[dict]:
                 "net_income": net_income,
                 "total_assets": total_assets,
                 "invested_capital": invested_capital if invested_capital else None,
+                "stockholders_equity": stockholders_equity,
                 "roic": roic,
                 "pbr": float(pbr) if pbr else None,
                 "per": float(per) if per else None,
@@ -408,38 +435,49 @@ async def get_us_financials(ticker: str) -> Optional[dict]:
 # ── 금·주식 동반 하락 시그널 (유동성 경색 감지) ─────────────────────
 async def get_gold_equity_signal() -> dict:
     """
-    금(GLD)과 주식(^GSPC, ^KS11) 동반 하락 여부 체크
-    반환: {"gold_drop": bool, "equity_drop": bool, "gold_change_pct": float, "spx_change_pct": float}
+    금(GLD), 주식(^GSPC), 유가(CL=F WTI, BZ=F Brent) 변화율 체크
+    반환: {"gold_drop": bool, "equity_drop": bool, "gold_change_pct": float,
+           "spx_change_pct": float, "wti_change_pct": float, "brent_change_pct": float,
+           "wti_price": float, "brent_price": float}
     """
     loop = asyncio.get_event_loop()
 
     def _fetch():
         try:
-            data = yf.download(["GLD", "^GSPC"], period="3d", auto_adjust=True, progress=False)
+            data = yf.download(["GLD", "^GSPC", "CL=F", "BZ=F"], period="3d", auto_adjust=True, progress=False)
             close = data["Close"] if isinstance(data.columns, pd.MultiIndex) else data
             result = {}
-            for ticker in ["GLD", "^GSPC"]:
+            for ticker in ["GLD", "^GSPC", "CL=F", "BZ=F"]:
                 try:
                     prices = close[ticker].dropna()
                     if len(prices) < 2:
-                        result[ticker] = 0.0
+                        result[ticker] = {"chg": 0.0, "price": None}
                     else:
-                        result[ticker] = float((prices.iloc[-1] - prices.iloc[-2]) / prices.iloc[-2] * 100)
+                        chg = float((prices.iloc[-1] - prices.iloc[-2]) / prices.iloc[-2] * 100)
+                        result[ticker] = {"chg": chg, "price": float(prices.iloc[-1])}
                 except Exception:
-                    result[ticker] = 0.0
+                    result[ticker] = {"chg": 0.0, "price": None}
             return result
         except Exception:
-            return {"GLD": 0.0, "^GSPC": 0.0}
+            return {}
 
     changes = await loop.run_in_executor(None, _fetch)
-    gold_chg = changes.get("GLD", 0.0)
-    spx_chg = changes.get("^GSPC", 0.0)
+    gold_chg  = changes.get("GLD",  {}).get("chg", 0.0)
+    spx_chg   = changes.get("^GSPC",{}).get("chg", 0.0)
+    wti_chg   = changes.get("CL=F", {}).get("chg", 0.0)
+    wti_price = changes.get("CL=F", {}).get("price")
+    brent_chg   = changes.get("BZ=F", {}).get("chg", 0.0)
+    brent_price = changes.get("BZ=F", {}).get("price")
 
     return {
         "gold_drop": gold_chg < -1.0,
         "equity_drop": spx_chg < -1.0,
         "gold_change_pct": round(gold_chg, 2),
         "spx_change_pct": round(spx_chg, 2),
+        "wti_change_pct": round(wti_chg, 2),
+        "brent_change_pct": round(brent_chg, 2),
+        "wti_price": round(wti_price, 2) if wti_price else None,
+        "brent_price": round(brent_price, 2) if brent_price else None,
     }
 
 
@@ -599,7 +637,42 @@ async def update_stock_universe():
         "950130": "엑세스바이오", "078600": "대주전자재료",
     }
     def _fetch_kr():
-        return KR_UNIVERSE
+        """FinanceDataReader로 KOSPI + KOSDAQ 시총 상위 200개 동적 수집"""
+        result = {}
+        try:
+            import FinanceDataReader as fdr
+            # KOSPI 전체 → 시총 상위 150개
+            kospi = fdr.StockListing("KOSPI")
+            if "Marcap" in kospi.columns:
+                kospi = kospi.nlargest(150, "Marcap")
+            else:
+                kospi = kospi.head(150)
+            for _, row in kospi.iterrows():
+                code = str(row.get("Code", row.get("Symbol", ""))).zfill(6)
+                name = str(row.get("Name", row.get("ISU_ABBRV", code)))
+                if code:
+                    result[code] = name
+        except Exception:
+            pass
+        try:
+            import FinanceDataReader as fdr
+            # KOSDAQ 전체 → 시총 상위 100개
+            kosdaq = fdr.StockListing("KOSDAQ")
+            if "Marcap" in kosdaq.columns:
+                kosdaq = kosdaq.nlargest(100, "Marcap")
+            else:
+                kosdaq = kosdaq.head(100)
+            for _, row in kosdaq.iterrows():
+                code = str(row.get("Code", row.get("Symbol", ""))).zfill(6)
+                name = str(row.get("Name", row.get("ISU_ABBRV", code)))
+                if code and code not in result:
+                    result[code] = name
+        except Exception:
+            pass
+        # 폴백: FDR 실패 시 하드코딩 유니버스 사용
+        if not result:
+            result = KR_UNIVERSE
+        return result
 
     # US 종목 (S&P500 + NASDAQ100) — Wikipedia with User-Agent
     def _fetch_us():

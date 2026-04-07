@@ -34,6 +34,8 @@ def _get_client() -> AsyncGroq:
 
 async def _call_claude(prompt: str, system: str, purpose: str) -> str:
     """Groq 호출 (Claude API 크레딧 충전 후 Claude로 교체 예정)"""
+    tokens = len(system + prompt) // 4
+    print(f"[LLM] purpose={purpose} | 토큰 추정={tokens}")
     try:
         client = _get_client()
         response = await client.chat.completions.create(
@@ -399,7 +401,36 @@ report_md에 반드시 아래 섹션을 포함할 것:
             "  - 매수 근거는 반드시 가격·거래량·기술 지표에서만 도출할 것.\n"
             "  - 뉴스가 좋아도 가격·거래량 신호가 없으면 진입 금지.\n"
             "  - 뉴스가 나빠도 가격·거래량 신호가 강하면 가격이 진실이다.\n"
+            "\n📊 수급 데이터 취급 원칙 (서퍼 전용):\n"
+            "  - foreign_net_3d(외국인 수급)·institution_net_3d(기관 수급)은 보조 참고 데이터다.\n"
+            "  - 수급 데이터가 없어도 기술 스코어·가격·거래량으로 판단 가능하다.\n"
+            "  - 수급 없음을 이유로 pass하는 것은 금지. 가격·거래량 신호가 충분하면 매수 가능.\n"
         )
+
+    # 베어 전용: 하락 베팅 진입 논리 강화
+    bear_entry_rules = ""
+    if agent_config.agent_id == "bear":
+        bear_entry_rules = """
+⚠️ 베어 에이전트 핵심 원칙 (절대 준수):
+
+당신은 시장 하락에 베팅하는 에이전트다. 일반 투자자와 반대로 생각해야 한다.
+
+✅ 매수 신호 (이 조건들이 보이면 인버스 ETF를 사야 한다):
+  - VIX 20 이상 → 시장 공포 확산 중 → 인버스 ETF 매수 우호적
+  - 공포탐욕지수 30 이하 → 투자자 심리 극단적 위험 회피 → 하락 모멘텀 지속 가능성
+  - 시장 국면 '하락장' 또는 '변동성급등' → 하락 추세 진입 신호
+
+⛔ 절대 금지 판단 오류:
+  - "VIX가 높으니 위험하다 → pass" → 틀린 판단. VIX 높음 = 당신의 매수 신호
+  - "공포가 극심하니 투자하지 않겠다 → pass" → 틀린 판단. 당신은 공포를 이용해 수익을 낸다
+  - "시장이 불안정하니 현금 보유 → pass" → 틀린 판단. 불안정성이 인버스 ETF의 수익원이다
+
+📋 판단 흐름:
+  1. 시스템이 당신에게 판단 요청을 보낸 것 = 하락 진입 조건이 이미 코드 레벨에서 확인됨
+  2. 당신의 임무는 어느 인버스 ETF를 살지, 얼마나 살지 결정하는 것
+  3. 조건이 약하면 hold(다음 조건 명시), 조건이 강하면 buy
+  4. pass는 오직 "모든 인버스 ETF 가격 데이터가 없는 경우"만 허용
+"""
 
     # 전략가 전용: 데이터 충분성 기반 판단 규칙
     strategist_data_rules = ""
@@ -446,7 +477,7 @@ report_md에 반드시 아래 섹션을 포함할 것:
 전략: {agent_config.strategy}
 투자 시간축: {agent_config.time_horizon}
 리포트 스타일: {agent_config.report_style}
-{macro_lens}{key_data_section}{forbidden_section}{macro_market_structure_rule}{explorer_news_trend_section}{news_usage_section}{strategist_data_rules}
+{macro_lens}{key_data_section}{forbidden_section}{macro_market_structure_rule}{explorer_news_trend_section}{news_usage_section}{bear_entry_rules}{strategist_data_rules}
 
 모든 판단은 한국어로 작성하세요.
 전문 용어 사용 시 반드시 괄호로 설명을 추가하세요. (예: PBR(주가순자산비율))
@@ -456,6 +487,7 @@ report_md에 반드시 아래 섹션을 포함할 것:
 - "⚠️없음"으로 표시된 항목은 데이터가 수집되지 않은 것이다. 해당 항목을 투자 근거로 사용하지 말 것.
 - data_gaps 필드가 있는 종목은 누락 데이터를 리포트에 명시할 것.
 - 당신의 required_data(핵심 판단 데이터)가 "⚠️없음"인 종목은 pass 처리할 것.
+- key_data는 있으면 참고하는 추가 정보다. key_data가 없어도 required_data가 있으면 판단 가능.
 
 📋 판단 구조 규칙:
 - hold(관망): 관심 종목이 있으나 아직 진입 조건 미충족 — 추후 재검토 예정
@@ -571,6 +603,7 @@ report_md에 반드시 아래 섹션을 포함할 것:
         "revenue", "operating_income", "net_income",
         "total_assets", "invested_capital",
         "financials_history", "pbr_band", "news_trend",
+        "recent_news",  # 전략가/탐색자는 ROIC·PBR 중심 — 뉴스 원문 불필요
     }
     _STRIP_RAW_AGENTS = {"strategist", "explorer"}
 
@@ -582,7 +615,10 @@ report_md에 반드시 아래 섹션을 포함할 것:
             strip |= _RAW_FINANCIALS
         return {k: v for k, v in c.items() if k not in strip}
 
-    cleaned_candidates = [_clean_candidate(c) for c in candidate_stocks[:20]]
+    # 전략가/미래탐색자는 후보 10개로 제한 (TPM 절약)
+    # 나머지 에이전트는 20개
+    _MAX_CANDIDATES = 10 if agent_config.agent_id in {"strategist", "explorer"} else 20
+    cleaned_candidates = [_clean_candidate(c) for c in candidate_stocks[:_MAX_CANDIDATES]]
 
     prompt = f"""
 ## 현재 시장 상황 (거시 수치)

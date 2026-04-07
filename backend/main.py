@@ -7,7 +7,7 @@ import os
 
 from backend.config import BASE_DIR
 from backend.database import get_pool, close_pool
-from backend.routers import dashboard, logs, agents
+from backend.routers import dashboard, logs, agents, analyze
 from backend.scheduler.jobs import create_scheduler
 
 
@@ -33,6 +33,7 @@ app.add_middleware(
 app.include_router(dashboard.router)
 app.include_router(logs.router)
 app.include_router(agents.router)
+app.include_router(analyze.router)
 
 
 @app.get("/health")
