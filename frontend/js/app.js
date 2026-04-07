@@ -99,6 +99,7 @@ function loadPageData(pageId) {
   if (pageId === 'debate')      loadDebate();
   if (pageId === 'roundtable')  loadRoundtable();
   if (pageId === 'data')        loadDataStatus();
+  if (pageId === 'analyze')     loadAnalysisHistory();
 }
 
 // ── Page: 메인 ─────────────────────────────────────────────────
@@ -626,7 +627,7 @@ async function _fetchAndRenderLogs() {
   const fromDate = document.getElementById('log-from-date')?.value   || '';
   const toDate   = document.getElementById('log-to-date')?.value     || '';
 
-  let url = `/api/logs/?limit=${logsLimit}`;
+  let url = `/api/logs/?limit=${logsLimit}&exclude_type=ondemand`;
   if (agent)    url += `&agent_id=${agent}`;
   if (type)     url += `&log_type=${type}`;
   if (fromDate) url += `&from_date=${fromDate}`;
@@ -796,12 +797,58 @@ async function runAnalyze() {
     }).join('');
 
     resultEl.classList.remove('hidden');
+    loadAnalysisHistory(); // 분석 완료 후 기록 갱신
   } catch (e) {
     alert('분석 실패: ' + e.message);
   } finally {
     btn.disabled = false;
     btn.innerHTML = '<span class="material-symbols-outlined text-base">search</span>분석 실행';
   }
+}
+
+async function loadAnalysisHistory() {
+  const el = document.getElementById('analysis-history-list');
+  if (!el) return;
+  const logs = await apiFetch('/api/logs/?log_type=ondemand&limit=20').catch(() => []);
+  if (!logs.length) {
+    el.innerHTML = '<div class="text-xs text-gray-600 py-4 text-center">분석 기록 없음</div>';
+    return;
+  }
+  // ticker별로 그룹핑 (같은 종목의 여러 에이전트 묶기)
+  const groups = {};
+  for (const log of logs) {
+    const key = `${log.tickers}_${log.created_at?.slice(0,16)}`;
+    if (!groups[key]) groups[key] = { ticker: log.tickers, time: log.created_at?.slice(0,16), logs: [] };
+    groups[key].logs.push(log);
+  }
+  el.innerHTML = Object.values(groups).map(g => {
+    const id = `ah-${g.ticker}-${g.time?.replace(/\D/g,'')}`;
+    const agentCards = g.logs.map(log => {
+      const decision = log.log_type === 'ondemand' ? (log.report_md?.match(/\*\*\[결론\]\*\* (\S+)/)?.[1] || '—') : '—';
+      const color = decision.includes('buy') || decision.includes('매수') ? '#22c55e' : decision.includes('pass') || decision.includes('패스') ? '#6b7280' : '#f59e0b';
+      return `<div class="border border-[#2a2f3e] rounded-xl overflow-hidden mt-2">
+        <div class="px-4 py-2 flex items-center justify-between bg-[#0f1117]">
+          <span class="text-xs font-bold text-gray-300">${AGENT_NAME_KR[log.agent_id] || log.agent_id}</span>
+          <span class="text-xs font-bold" style="color:${color}">${decision}</span>
+        </div>
+        <div class="px-4 py-3 prose prose-invert prose-sm max-w-none text-gray-400 text-xs leading-relaxed">
+          ${log.report_md ? renderMarkdown(log.report_md) : '<p class="text-gray-600">리포트 없음</p>'}
+        </div>
+      </div>`;
+    }).join('');
+    return `<div class="bg-card border border-[#2a2f3e] rounded-2xl overflow-hidden">
+      <button onclick="document.getElementById('${id}').classList.toggle('hidden')"
+              class="w-full px-5 py-3 flex items-center justify-between hover:bg-white/5 transition-colors">
+        <div class="flex items-center gap-3">
+          <span class="material-symbols-outlined text-base text-gray-500">expand_more</span>
+          <span class="text-sm font-semibold text-white">${g.ticker}</span>
+          <span class="text-xs text-gray-500">${g.logs.length}개 에이전트</span>
+        </div>
+        <span class="text-xs text-gray-600">${g.time || ''}</span>
+      </button>
+      <div id="${id}" class="hidden px-5 pb-4">${agentCards}</div>
+    </div>`;
+  }).join('');
 }
 
 // ── Page: 데이터현황 ───────────────────────────────────────────
