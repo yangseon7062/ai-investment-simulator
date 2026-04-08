@@ -70,7 +70,7 @@ def calc_volume_signal(volumes: list[float]) -> float:
 
 
 def calc_technical_score(prices: list[float], volumes: list[float]) -> float:
-    """기술적 스코어 (0~100)"""
+    """기술적 스코어 (0~100) — 기본: RSI 40% + MA 40% + 거래량 20%"""
     rsi = calc_rsi(prices) or 50.0
     ma_signal = calc_ma_signal(prices)
     vol_signal = calc_volume_signal(volumes)
@@ -81,6 +81,7 @@ def calc_technical_score(prices: list[float], volumes: list[float]) -> float:
         rsi_score = 75 - (rsi - 75) * 1.5   # 과열 패널티
 
     return round(rsi_score * 0.4 + ma_signal * 0.4 + vol_signal * 0.2, 2)
+
 
 
 # ── 재무 스코어 ────────────────────────────────────────────────────

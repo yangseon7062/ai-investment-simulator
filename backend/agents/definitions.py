@@ -71,7 +71,7 @@ AGENTS: dict[str, AgentConfig] = {
         ),
         time_horizon="1~4주",
         max_positions=4,
-        markets=["KR", "US"],
+        markets=["US"],
         buy_method="정찰병 (소량 선진입 → 확신 시 추가)",
         sell_method="분할매도",
         max_add_rounds=2,
@@ -104,7 +104,7 @@ AGENTS: dict[str, AgentConfig] = {
         ),
         time_horizon="8~24주",
         max_positions=3,
-        markets=["KR", "US"],
+        markets=["US"],
         buy_method="정찰병",
         sell_method="분할매도",
         max_add_rounds=1,
@@ -115,7 +115,7 @@ AGENTS: dict[str, AgentConfig] = {
         report_depth="full",
         score_weights={"technical": 0.2, "fundamental": 0.8},  # 재무 퀄리티 중심
         monitor_daily=False,
-        required_data=["price", "roic"],  # ROIC 없는 종목은 해자 검증 불가 → 제외
+        required_data=["price"],  # ROIC 없으면 PBR·PER·부채비율로 대체 판단
         key_data=["roic", "pbr", "per", "revenue_growth", "sector_etf",
                   "gross_margin", "fcf", "debt_ratio"],
         forbidden_topics=["VIX", "공포탐욕지수", "거래량 급증", "단기 모멘텀", "시장 분위기"],
@@ -135,7 +135,7 @@ AGENTS: dict[str, AgentConfig] = {
         ),
         time_horizon="3~10일",
         max_positions=5,
-        markets=["KR", "US"],
+        markets=["US"],
         buy_method="피라미딩 (모멘텀 확인될수록 추가)",
         sell_method="트레일링 스탑 (-7%)",
         max_add_rounds=3,
@@ -146,8 +146,7 @@ AGENTS: dict[str, AgentConfig] = {
         report_depth="compact",
         score_weights={"technical": 0.85, "fundamental": 0.15},  # 모멘텀 — 기술 압도적 우선
         required_data=["price", "technical_score"],  # 기술 스코어 없으면 모멘텀 판단 불가
-        key_data=["technical_score", "foreign_net_3d", "institution_net_3d",
-                  "pct_from_high", "gap_pct"],
+        key_data=["technical_score", "pct_from_high", "gap_pct"],
         # recent_news는 key_data에서 제외 — 뉴스는 보조 확인용, 판단 근거로 사용 금지
         forbidden_topics=["기업 성장성", "ROIC", "PBR", "PER", "매출성장률", "장기 전망",
                           "뉴스 내용을 매수 근거로 사용",
@@ -173,7 +172,7 @@ AGENTS: dict[str, AgentConfig] = {
         ),
         time_horizon="2~8주",
         max_positions=5,
-        markets=["KR", "US"],
+        markets=["US"],
         buy_method="정찰병",
         sell_method="분할매도",
         max_add_rounds=2,
@@ -208,7 +207,7 @@ AGENTS: dict[str, AgentConfig] = {
         max_hold_days=21,
         time_horizon="1~3주",
         max_positions=3,
-        markets=["KR", "US"],
+        markets=["US"],
         buy_method="분할매수 (시장 악화 단계별)",
         sell_method="일괄매도",
         max_add_rounds=2,
