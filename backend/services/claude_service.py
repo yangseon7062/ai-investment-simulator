@@ -125,7 +125,12 @@ async def _call_claude(prompt: str, system: str, purpose: str) -> str:
 
         if result.returncode != 0:
             err = result.stderr.decode("utf-8", errors="ignore").strip()
-            raise RuntimeError(f"claude -p 오류 (exit {result.returncode}): {err}")
+            stdout_preview = result.stdout.decode("utf-8", errors="ignore").strip()[:200]
+            raise RuntimeError(
+                f"claude -p 오류 (exit {result.returncode})"
+                f" | stderr: {err or '(없음)'}"
+                f" | stdout: {stdout_preview or '(없음)'}"
+            )
         return result.stdout.decode("utf-8", errors="ignore").strip()
 
     # 1회 재시도
@@ -137,7 +142,7 @@ async def _call_claude(prompt: str, system: str, purpose: str) -> str:
         except Exception as e:
             print(f"[Claude/_call_claude] 시도 {attempt+1} 실패: {e}")
             if attempt == 0:
-                await asyncio.sleep(3)
+                await asyncio.sleep(5)
 
     print(f"[Claude/_call_claude] 2회 모두 실패 - pass 처리")
     return ""
