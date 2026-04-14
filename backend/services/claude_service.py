@@ -9,54 +9,177 @@ Claude API 서비스
 """
 
 import json
+import asyncio
+import shutil
 from datetime import datetime
-from groq import AsyncGroq
 
-from backend.config import GROQ_API_KEY, CLAUDE_MAX_TOKENS
+from backend.config import CLAUDE_MAX_TOKENS
 from backend.database import execute as db_execute
 
-# ── 임시: Groq으로 운영 (Claude API 크레딧 충전 후 아래 주석 교체) ──
-# 교체 방법:
-#   1. from anthropic import AsyncAnthropic
-#   2. from backend.config import ANTHROPIC_API_KEY, CLAUDE_MODEL
-#   3. client = AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
-#   4. _call_claude 내부를 원래 Claude 호출 코드로 복원
-GROQ_MODEL = "llama-3.3-70b-versatile"
-_client: AsyncGroq | None = None
+# ── Claude Code CLI 호출 방식 ──
+# claude -p 로 비대화형 실행. 웹 검색 포함.
+# Groq 롤백 필요 시: git checkout HEAD~1 backend/services/claude_service.py
+
+_CLAUDE_BIN: str | None = None
+_CLAUDE_BIN_CHECKED: bool = False
 
 
-def _get_client() -> AsyncGroq:
-    global _client
-    if _client is None:
-        _client = AsyncGroq(api_key=GROQ_API_KEY)
-    return _client
+def _get_claude_bin() -> str | None:
+    """Claude Code CLI 경로 반환. 없으면 None."""
+    global _CLAUDE_BIN, _CLAUDE_BIN_CHECKED
+    if not _CLAUDE_BIN_CHECKED:
+        _CLAUDE_BIN_CHECKED = True
+        found = shutil.which("claude")
+        if found:
+            _CLAUDE_BIN = found
+        else:
+            import os
+            candidates = [
+                os.path.expanduser("~\\AppData\\Roaming\\npm\\claude.cmd"),
+                os.path.expanduser("~\\AppData\\Local\\AnthropicClaude\\claude.exe"),
+            ]
+            for c in candidates:
+                if os.path.exists(c):
+                    _CLAUDE_BIN = c
+                    break
+    return _CLAUDE_BIN
+
+
+async def _call_claude_api(prompt: str, system: str, purpose: str) -> str:
+    """Anthropic Python SDK 호출 (claude CLI 없는 환경 fallback — 웹 검색 미지원)."""
+    import os
+    try:
+        import anthropic
+    except ImportError:
+        raise RuntimeError("anthropic 패키지 미설치")
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise RuntimeError("ANTHROPIC_API_KEY 환경변수 없음")
+
+    client = anthropic.Anthropic(api_key=api_key)
+
+    def _run():
+        return client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=CLAUDE_MAX_TOKENS,
+            system=system,
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+    response = await asyncio.get_event_loop().run_in_executor(None, _run)
+    return response.content[0].text
 
 
 async def _call_claude(prompt: str, system: str, purpose: str) -> str:
-    """Groq 호출 (Claude API 크레딧 충전 후 Claude로 교체 예정)"""
+    """LLM 호출. claude CLI 있으면 claude -p (웹 검색), 없으면 Anthropic SDK fallback."""
+    import subprocess, tempfile, os
+
     tokens = len(system + prompt) // 4
     print(f"[LLM] purpose={purpose} | 토큰 추정={tokens}")
-    try:
-        client = _get_client()
-        response = await client.chat.completions.create(
-            model=GROQ_MODEL,
-            max_tokens=min(CLAUDE_MAX_TOKENS, 8000),
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": prompt},
-            ],
-        )
-        text = response.choices[0].message.content or ""
-        # 비용 트래킹 (Groq는 무료이므로 0으로 기록)
-        await db_execute(
-            """INSERT INTO api_usage (model, input_tokens, output_tokens, estimated_cost, purpose)
-               VALUES ($1, $2, $3, $4, $5)""",
-            (GROQ_MODEL, 0, 0, 0.0, purpose),
-        )
-        return text
-    except Exception as e:
-        print(f"[Groq/_call_claude] 오류: {e}")
+
+    claude_bin = _get_claude_bin()
+
+    # Claude CLI 없으면 SDK fallback
+    if not claude_bin:
+        print(f"[LLM] claude CLI 없음 - Anthropic SDK fallback (웹 검색 미지원)")
+        for attempt in range(2):
+            try:
+                text = await _call_claude_api(prompt, system, purpose)
+                print(f"[LLM 응답 미리보기] {text[:300]}")
+                return text
+            except Exception as e:
+                print(f"[LLM/SDK] 시도 {attempt+1} 실패: {e}")
+                if attempt == 0:
+                    await asyncio.sleep(3)
+        print(f"[LLM/SDK] 2회 모두 실패 - pass 처리")
         return ""
+
+    combined = f"{system}\n\n{prompt}"
+
+    async def _run() -> str:
+        # 임시 파일에 프롬프트 기록 후 stdin 리다이렉트
+        # (Windows pipe 버퍼 문제 및 .cmd 래퍼 stdin 전달 문제 우회)
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", delete=False, encoding="utf-8"
+        )
+        try:
+            tmp.write(combined)
+            tmp.close()
+            with open(tmp.name, "rb") as stdin_file:
+                result = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: subprocess.run(
+                        ["cmd.exe", "/c", claude_bin, "-p"],
+                        stdin=stdin_file,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        timeout=180,
+                    )
+                )
+        finally:
+            try:
+                os.unlink(tmp.name)
+            except Exception:
+                pass
+
+        if result.returncode != 0:
+            err = result.stderr.decode("utf-8", errors="ignore").strip()
+            raise RuntimeError(f"claude -p 오류 (exit {result.returncode}): {err}")
+        return result.stdout.decode("utf-8", errors="ignore").strip()
+
+    # 1회 재시도
+    for attempt in range(2):
+        try:
+            text = await _run()
+            print(f"[LLM 응답 미리보기] {text[:300].encode('ascii', errors='replace').decode()}")
+            return text
+        except Exception as e:
+            print(f"[Claude/_call_claude] 시도 {attempt+1} 실패: {e}")
+            if attempt == 0:
+                await asyncio.sleep(3)
+
+    print(f"[Claude/_call_claude] 2회 모두 실패 - pass 처리")
+    return ""
+
+
+# ── 에이전트별 웹 검색 지시 ─────────────────────────────────────────────
+
+_WEB_SEARCH_INSTRUCTIONS = {
+    "macro": """
+🔍 웹 검색 활용 (판단 전 필수):
+- VIX 또는 금리가 큰 폭으로 움직인 경우: 원인을 웹 검색으로 파악하라 (수치만이 아닌 맥락).
+- 매수할 섹터 ETF 후보가 있다면: 해당 섹터의 최신 이슈·정책·이벤트를 검색하라.
+- watch_trigger(금리·환율·유가·달러 2개 이상 동시 변화) 조건 충족 시: 원인이 일시적인지 구조적인지 확인.
+""",
+    "strategist": """
+🔍 웹 검색 활용 (매수 후보가 있을 때 필수):
+- PBR 음수 또는 비정상적 수치: yfinance 이상값인지 실제 재무 이슈인지 교차 확인.
+- 최종 매수 후보 확정 전: 해당 기업의 최근 실적 발표일·어닝 서프라이즈 여부 확인 (진입 타이밍 리스크).
+- 해자(경쟁 우위)가 실제로 유효한지: 최근 뉴스·공시·경쟁사 동향 확인.
+- 반론 검토: "좋은 회사인데 지금 타이밍이 맞는가" — 매수 근거를 반박하는 정보도 검색하라.
+""",
+    "surfer": """
+🔍 웹 검색 활용 (거래량 급등 종목 한정):
+- 거래량이 급등한 종목: 단순 수치 확인이 아닌 원인 파악 (공시? 실적? 기관 매수? 뉴스?).
+- fake breakout 판단: 거래량 급등 원인이 지속 가능한지 확인.
+- 재무·거시 관련 웹 검색은 하지 말 것 (전략 범위 밖).
+""",
+    "explorer": """
+🔍 웹 검색 활용 (테마 유효성 확인):
+- 매수 후보의 산업/테마: 지금 실제로 성장 중인지 최신 뉴스·리포트로 확인.
+- 성장 스토리가 "지금 시작"인지 "이미 주가에 반영됐는지" 판단: 최근 6개월 주가 흐름 + 애널리스트 커버리지 증가 여부.
+""",
+    "bear": """
+🔍 웹 검색 활용 (하락 트리거 확인):
+- 하락 베팅 조건 진입 전: 하락 트리거가 실제로 존재하는지 웹 확인 (뉴스·경제지표·정책).
+- 이미 보유 중인 경우: VIX 안정화 신호 + 시장 반등 조짐 검색 → 조기 청산 조건 점검.
+""",
+}
+
+
+def _build_web_search_section(agent_id: str) -> str:
+    return _WEB_SEARCH_INSTRUCTIONS.get(agent_id, "")
 
 
 # ── Plan A: 에이전트별 고정 매크로 프레임워크 ──────────────────────────
@@ -306,6 +429,7 @@ async def generate_agent_decision(
     current_positions: list[dict],
     recent_logs: list[dict],
     recent_losses: list[dict] | None = None,
+    recent_wins: list[dict] | None = None,
     extra_context: dict | None = None,
     consensus_map: dict | None = None,
 ) -> dict:
@@ -474,13 +598,14 @@ report_md에 반드시 아래 섹션을 포함할 것:
   - 리포트에 pbr_band.percentile이 있으면: "(역사 밴드 하위 {percentile}% 구간, {quarters}분기 기준)" 형식으로 명시
 """
 
+    web_search_section = _build_web_search_section(agent_config.agent_id)
+
     system = f"""당신은 '{agent_config.name_kr}'라는 AI 투자 에이전트입니다.
 페르소나: {agent_config.persona}
 전략: {agent_config.strategy}
 투자 시간축: {agent_config.time_horizon}
 리포트 스타일: {agent_config.report_style}
-{macro_lens}{key_data_section}{forbidden_section}{macro_market_structure_rule}{explorer_news_trend_section}{news_usage_section}{bear_entry_rules}{strategist_data_rules}
-
+{macro_lens}{key_data_section}{forbidden_section}{macro_market_structure_rule}{explorer_news_trend_section}{news_usage_section}{bear_entry_rules}{strategist_data_rules}{web_search_section}
 모든 판단은 한국어로 작성하세요.
 전문 용어 사용 시 반드시 괄호로 설명을 추가하세요. (예: PBR(주가순자산비율))
 숫자 근거는 반드시 의미 해석을 포함하세요.
@@ -521,7 +646,7 @@ report_md에 반드시 아래 섹션을 포함할 것:
         if narrative_us:
             narrative_section += f"**[미국]** {narrative_us}\n"
 
-    # 최근 손절 내역 섹션 (Task 3)
+    # 최근 손절 내역 섹션
     loss_section = ""
     if recent_losses:
         loss_lines = []
@@ -534,6 +659,21 @@ report_md에 반드시 아래 섹션을 포함할 것:
             f"\n## 최근 30일 손절 내역 + 실패 유형 (반드시 참고)\n"
             + "\n".join(loss_lines)
             + "\n⚠️ 위와 같은 실패 패턴을 이번 판단에서 반복하지 말 것. 위 종목 재진입 시 신중하게 판단할 것.\n"
+        )
+
+    # 최근 수익 내역 섹션 (성공 패턴 학습)
+    win_section = ""
+    if recent_wins:
+        win_lines = []
+        for w in recent_wins:
+            line = f"- {w.get('ticker')} {w.get('pnl_pct', 0):+.1f}% ({w.get('created_at', '')[:10]})"
+            if w.get("win_summary"):
+                line += f"\n  → 성공 요약: {w['win_summary'][:150]}"
+            win_lines.append(line)
+        win_section = (
+            f"\n## 최근 90일 수익 사례 (성공 패턴 참고)\n"
+            + "\n".join(win_lines)
+            + "\n💡 위 성공 사례에서 어떤 조건이 맞아떨어졌는지 이번 판단에 참고할 것.\n"
         )
 
     # extra_context 섹션 구성
@@ -623,13 +763,17 @@ report_md에 반드시 아래 섹션을 포함할 것:
     _MAX_CANDIDATES = 10 if agent_config.agent_id in {"strategist", "explorer"} else 20
     cleaned_candidates = [_clean_candidate(c) for c in candidate_stocks[:_MAX_CANDIDATES]]
 
+    macro_verdict_section = ""
+    if market_context.get("macro_verdict"):
+        macro_verdict_section = f"\n## 매크로 에이전트 선행 판단\n{market_context['macro_verdict']}\n"
+
     prompt = f"""
 ## 현재 시장 상황 (거시 수치)
 국면: KR={market_context.get('regime_kr')} / US={market_context.get('regime_us')}
 VIX: {market_context.get('vix')} | 공포탐욕지수: {market_context.get('fear_greed')}
 FRED 금리: {json.dumps(market_context.get('fred', {}), ensure_ascii=False)}
 gold 변화: {market_context.get('gold_change_pct', 0):+.1f}% | S&P500 변화: {market_context.get('spx_change_pct', 0):+.1f}%
-{macro_change_section}{extra_section}{narrative_section}{warning_context}{loss_section}
+{macro_change_section}{macro_verdict_section}{extra_section}{narrative_section}{warning_context}{loss_section}{win_section}
 ## 보유 포지션 ({len(current_positions)}개) — 현재 수익률 포함
 {json.dumps(pos_summary, ensure_ascii=False, indent=2)}
 
@@ -809,14 +953,21 @@ async def generate_postmortem(
     pnl_pct_krw: float,
     holding_days: int,
 ) -> str:
-    """사후 검증 리포트 생성"""
+    """사후 검증 리포트 생성 (웹 검색으로 실제 결과 확인 포함)"""
+    outcome = "수익" if pnl_pct > 0 else "손실"
+
     system = f"""당신은 '{agent_config.name_kr}' AI 에이전트입니다.
-자신의 투자 결정을 솔직하게 회고하세요. 맞았으면 왜 맞았는지, 틀렸으면 왜 틀렸는지."""
+자신의 투자 결정을 솔직하게 회고하세요. 맞았으면 왜 맞았는지, 틀렸으면 왜 틀렸는지.
+
+🔍 웹 검색 활용 (사후 분석 필수):
+- {ticker}({name})의 최근 주가 흐름·실적·뉴스를 검색해 매도 후 실제로 어떻게 됐는지 확인하라.
+- {'손실 원인' if pnl_pct < 0 else '수익 요인'}이 매수 당시 리포트에서 예측 가능했는지 판단하라.
+- 같은 조건이 다시 오면 어떻게 대응해야 하는지 구체적 기준을 제시하라."""
 
     prompt = f"""
 ## 종료된 포지션
 종목: {name} ({ticker})
-수익률: {pnl_pct:+.2f}% (환율 반영 원화 실질: {pnl_pct_krw:+.2f}%)
+결과: {outcome} {pnl_pct:+.2f}% (환율 반영 원화 실질: {pnl_pct_krw:+.2f}%)
 보유 기간: {holding_days}일
 
 ## 매수 당시 리포트
@@ -827,10 +978,12 @@ async def generate_postmortem(
 
 ---
 
-이 투자에 대해 솔직하게 사후 검증하세요:
-1. 왜 맞았나 / 왜 틀렸나
-2. 어떤 신호를 놓쳤나 (할인율 변화, 이익 반응 테스트, 베어 플래트닝 등)
-3. 같은 상황이 다시 오면 어떻게 할 것인가
+위 정보 + 웹 검색 결과를 바탕으로 사후 검증하세요:
+
+1. **결과 확인**: 매도 후 {ticker} 주가가 실제로 어떻게 됐나? (웹 검색)
+2. **판단 평가**: 왜 맞았나 / 왜 틀렸나 — 매수 테제가 실제로 맞았는지
+3. **놓친 신호**: 당시 리포트에서 놓쳤거나 과소평가한 리스크
+4. **재발 방지**: 같은 상황이 다시 오면 어떤 기준으로 다르게 판단할 것인가
 
 마크다운 형식으로 작성. 한국어.
 """

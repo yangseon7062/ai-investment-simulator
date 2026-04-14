@@ -33,13 +33,19 @@ class AnalyzeRequest(BaseModel):
 
 async def _fetch_candidate(ticker: str, market: str) -> dict:
     """단일 종목 데이터 수집 (가격 + 재무 + 뉴스 + 수급 + 52주 고저)"""
-    # 1. 현재가
-    if market == "KR":
-        prices = await get_kr_prices([ticker])
-    else:
-        prices = await get_us_prices([ticker])
+    # 1. 현재가 (최대 3회 재시도)
+    price_data = {}
+    for attempt in range(3):
+        if attempt > 0:
+            await asyncio.sleep(3)
+        if market == "KR":
+            prices = await get_kr_prices([ticker])
+        else:
+            prices = await get_us_prices([ticker])
+        price_data = prices.get(ticker, {})
+        if price_data.get("price", 0) > 0:
+            break
 
-    price_data = prices.get(ticker, {})
     price = price_data.get("price", 0)
 
     # 종목 기본 정보 (company_info)
@@ -214,7 +220,7 @@ async def analyze_stock(req: AnalyzeRequest):
         raise HTTPException(status_code=500, detail=f"종목 데이터 수집 실패: {e}")
 
     if not candidate.get("price") or candidate["price"] <= 0:
-        raise HTTPException(status_code=404, detail=f"{ticker} 가격 조회 실패. 종목 코드/시장을 확인하세요.")
+        raise HTTPException(status_code=404, detail=f"{ticker} 가격 조회 실패 (3회 재시도 후). 종목 코드/시장을 확인하거나 잠시 후 다시 시도하세요.")
 
     # 시장 컨텍스트
     market_context = await _get_market_context()

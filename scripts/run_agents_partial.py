@@ -40,18 +40,33 @@ async def main(agent_ids: list[str]):
         "price_spikes": {},
     }
 
-    for agent_id in agent_ids:
+    # 매크로가 목록에 있으면 먼저 실행 후 macro_verdict 주입 (run_all_agents 동일 로직)
+    ordered_ids = (["macro"] + [a for a in agent_ids if a != "macro"]) if "macro" in agent_ids else agent_ids
+
+    for agent_id in ordered_ids:
         try:
             agent_config = get_agent(agent_id)
             print(f"\n{'='*40}")
             print(f"  [{agent_id}] 실행 중...")
             result = await run_single_agent(agent_config, market_context)
             print(f"  [{agent_id}] 완료 → {result.get('decision')} {result.get('ticker') or ''}")
+
+            # 매크로 완료 후 verdict 주입
+            if agent_id == "macro":
+                macro_decision = result.get("decision", "pass")
+                macro_ticker = result.get("ticker") or "없음"
+                macro_thesis = result.get("thesis") or ""
+                market_context["macro_verdict"] = (
+                    f"매크로 판단: {macro_decision.upper()}"
+                    + (f" ({macro_ticker})" if macro_decision == "buy" else "")
+                    + (f" — {macro_thesis}" if macro_thesis else "")
+                )
+                print(f"  [macro_verdict] {market_context['macro_verdict'].encode('ascii', errors='replace').decode()}")
         except Exception as e:
             print(f"  [{agent_id}] 오류: {e}")
             import traceback; traceback.print_exc()
         if len(agent_ids) > 1:
-            await asyncio.sleep(10)
+            await asyncio.sleep(5)
 
 
 if __name__ == "__main__":

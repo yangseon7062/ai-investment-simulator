@@ -160,18 +160,36 @@ async def run_single_agent(agent_config, market_context: dict) -> dict:
         recent_losses = []
         for r in loss_rows:
             row = {k: (v.isoformat() if hasattr(v, 'isoformat') else v) for k, v in dict(r).items()}
-            # report_md에서 핵심만 추출 (첫 300자) — 전문은 TPM 낭비
             if row.get("report_md"):
                 row["failure_summary"] = row["report_md"][:300]
             row.pop("report_md", None)
             recent_losses.append(row)
 
-    # 스코어 상위 종목 (KR + US)
+    # 최근 90일 수익 내역 (성공 패턴 피드백)
+    async with get_db() as conn:
+        win_rows = await conn.fetch(
+            """SELECT ticker, pnl_pct, pnl_pct_krw, report_md, created_at
+               FROM postmortems
+               WHERE agent_id = $1 AND pnl_pct > 0 AND created_at > NOW() - INTERVAL '90 days'
+               ORDER BY pnl_pct DESC LIMIT 5""",
+            agent_id,
+        )
+        recent_wins = []
+        for r in win_rows:
+            row = {k: (v.isoformat() if hasattr(v, 'isoformat') else v) for k, v in dict(r).items()}
+            if row.get("report_md"):
+                row["win_summary"] = row["report_md"][:200]
+            row.pop("report_md", None)
+            recent_wins.append(row)
+
+    # 스코어 상위 종목 (에이전트 markets 설정에 따라 KR/US 선택)
+    fetch_kr = "KR" in agent_config.markets
+    fetch_us = "US" in agent_config.markets
     kr_candidates, us_candidates = await asyncio.gather(
-        get_top_stocks(agent_id, "KR", top_n=20),
-        get_top_stocks(agent_id, "US", top_n=20),
+        get_top_stocks(agent_id, "KR", top_n=20) if fetch_kr else asyncio.sleep(0),
+        get_top_stocks(agent_id, "US", top_n=20) if fetch_us else asyncio.sleep(0),
     )
-    candidates = kr_candidates + us_candidates
+    candidates = (kr_candidates if fetch_kr else []) + (us_candidates if fetch_us else [])
 
     # 매크로는 섹터 ETF만 (개별 종목 매수 금지)
     if agent_config.etf_only:
@@ -476,6 +494,7 @@ async def run_single_agent(agent_config, market_context: dict) -> dict:
         positions,
         recent_logs,
         recent_losses,
+        recent_wins,
         extra_context=filtered_extra,
         consensus_map=filtered_consensus,
     )
@@ -515,6 +534,10 @@ def _build_agent_context(agent_config, market_context: dict) -> dict:
         ctx.pop("equity_drop", None)
         ctx.pop("gold_change_pct", None)
         ctx.pop("spx_change_pct", None)
+        ctx.pop("macro_verdict", None)  # 매크로 판단 요약도 차단
+    # 매크로 에이전트 본인에게는 macro_verdict 불필요 (자신의 판단이므로)
+    if agent_config.agent_id == "macro":
+        ctx.pop("macro_verdict", None)
     return ctx
 
 
@@ -869,8 +892,16 @@ async def _save_pass_log(agent_id: str, reason: str, market_context: dict, repor
 
 # ── 후처리: 충돌 감지 + 요약 ──────────────────────────────────────
 
+_MACRO_WARNING_KEYWORDS = ["위험", "경고", "경계", "하락", "공포", "위기", "긴축", "급등", "악화", "경색"]
+
+
 async def detect_conflicts_and_debate(decisions: list[dict]):
-    """같은 종목 반대 포지션 감지 → 토론 리포트"""
+    """충돌 감지 → 토론 리포트 (전체 실행 후 별도 claude -p 호출)
+
+    충돌 조건:
+    1. 같은 종목 buy/sell 반대 포지션 (기존)
+    2. 매크로가 위험 경고 pass를 냈는데 다른 에이전트가 매수 (신규)
+    """
     today = date.today()
     async with get_db() as conn:
         today_logs = [dict(r) for r in await conn.fetch(
@@ -879,6 +910,7 @@ async def detect_conflicts_and_debate(decisions: list[dict]):
             today,
         )]
 
+    # ── 조건 1: 같은 종목 buy/sell 충돌 ──
     buy_agents: dict[str, dict] = {}
     sell_agents: dict[str, dict] = {}
 
@@ -903,6 +935,43 @@ async def detect_conflicts_and_debate(decisions: list[dict]):
                VALUES ('system', 'debate', $1, $2)""",
             (ticker, debate_report),
         )
+
+    # ── 조건 2: 매크로 위험 경고 pass + 다른 에이전트 매수 ──
+    macro_result = next((d for d in decisions if d.get("agent_id") == "macro"), None)
+    if not macro_result:
+        return
+
+    # 매크로가 pass이고 리포트에 위험 키워드가 있을 때만
+    if macro_result.get("decision") != "pass":
+        return
+
+    macro_report = macro_result.get("report_md", "")
+    has_warning = any(kw in macro_report for kw in _MACRO_WARNING_KEYWORDS)
+    if not has_warning:
+        return
+
+    # 오늘 매수한 에이전트 확인 (macro 제외)
+    buy_decisions = [
+        d for d in decisions
+        if d.get("decision") == "buy" and d.get("agent_id") != "macro" and d.get("ticker")
+    ]
+    if not buy_decisions:
+        return
+
+    for buy_d in buy_decisions:
+        ticker = buy_d.get("ticker")
+        debate_report = await generate_debate(
+            ticker, ticker,
+            buy_d["agent_id"], buy_d.get("report_md", ""),
+            "macro", macro_report,
+        )
+        await db_execute(
+            """INSERT INTO investment_logs
+               (agent_id, log_type, tickers, report_md)
+               VALUES ('system', 'debate', $1, $2)""",
+            (ticker, debate_report),
+        )
+        print(f"  [충돌 중재] {buy_d['agent_id']} 매수 vs 매크로 위험 경고 - {ticker}")
 
 
 async def save_portfolio_snapshots():
@@ -989,15 +1058,34 @@ async def run_all_agents(price_spikes: dict | None = None):
         "price_spikes": price_spikes or {},  # 급락 종목 {ticker: change_pct}
     }
 
-    agents = get_all_agents()
+    # ── 매크로 에이전트 선행 실행 → 시장 맥락 추출 ──
+    agents = get_all_agents()  # macro가 첫 번째
+    macro_agent = agents[0]    # 항상 macro
+    rest_agents = agents[1:]
+
     decisions = []
-    for agent in agents:
+    try:
+        macro_result = await run_single_agent(macro_agent, market_context)
+        decisions.append(macro_result)
+        # 매크로 판단 요약 → 나머지 에이전트 컨텍스트에 주입
+        macro_decision = macro_result.get("decision", "pass")
+        macro_ticker = macro_result.get("ticker") or "없음"
+        macro_thesis = macro_result.get("thesis") or ""
+        market_context["macro_verdict"] = (
+            f"매크로 판단: {macro_decision.upper()}"
+            + (f" ({macro_ticker})" if macro_decision == "buy" else "")
+            + (f" - {macro_thesis}" if macro_thesis else "")
+        )
+        print(f"  [macro_verdict] {market_context['macro_verdict']}")
+    except Exception as e:
+        print(f"  [macro] 오류: {e}")
+
+    for agent in rest_agents:
         try:
             result = await run_single_agent(agent, market_context)
             decisions.append(result)
         except Exception as e:
             print(f"  [{agent.agent_id}] 오류: {e}")
-        await asyncio.sleep(30)  # Groq TPM 한도 대응 (에이전트 간 30초 대기)
 
     print(f"[{datetime.now().strftime('%H:%M:%S')}] 후처리 시작")
 
