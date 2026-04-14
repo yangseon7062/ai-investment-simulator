@@ -474,12 +474,10 @@ async def run_scoring_engine():
     print("  PBR/PER 일별 갱신 중...")
     await _update_daily_valuation(us_tickers, kr_tickers)
 
-    # ── 시세 수집 ──
+    # ── 시세 수집 (순차 실행 — yfinance 동시 호출 시 dictionary mutation 오류 방지) ──
     print("  시세 수집 중...")
-    kr_prices, us_prices = await asyncio.gather(
-        get_kr_prices(kr_tickers),
-        get_us_prices(us_tickers),
-    )
+    kr_prices = await get_kr_prices(kr_tickers)
+    us_prices = await get_us_prices(us_tickers)
 
     # ── 스코어 계산 + 저장 ──
     records = []
